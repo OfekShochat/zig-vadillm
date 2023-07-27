@@ -1,109 +1,20 @@
 const std = @import("std");
+const types = @import("types.zig");
+const Type = @import("types.zig").Type;
 
-pub const NodeRef = u32;
+pub const ValueRef = u32;
+pub const BlockRef = u32;
+pub const FuncRef = u32;
+pub const InstRef = u32;
+pub const ConstantRef = u32;
 
-const SIZE_MASK = 0b111;
-const INVALID_MASK = 0xFFFF;
-const IS_INT_MASK = 1 << 3;
-const IS_FLOAT_MASK = 1 << 4;
-const IS_PTR_MASK = 1 << 5;
-const IS_VECTOR_MASK = 1 << 6;
-const LANES_MASK = 0b111 << 7;
+pub const BinOp = struct { lhs: ValueRef, rhs: ValueRef };
 
-/// Type; can you guess what this is?
-/// Encoded in a bitset (0x0 is void, 0xFFFF is invalid):
-/// +---------------+-----+-------+-----+--------+-------------+
-/// | 0-2           | 3   | 4     | 5   | 6      | 7-9         |
-/// +---------------+-----+-------+-----+--------+-------------+
-/// | log2(bitsize) | int | float | ptr | vector | log2(lanes) |
-/// +---------------+-----+-------+-----+--------+-------------+
-pub const Type = struct {
-    val: u16,
-
-    pub fn from(comptime T: type) Type {
-        var val: u16 = 0;
-
-        const type_info = @typeInfo(T);
-        switch (type_info) {
-            .Float => |float| {
-                comptime if (!std.math.isPowerOfTwo(float.bits)) {
-                    @compileError("float bits have to be powers of two.");
-                };
-                val |= IS_FLOAT_MASK;
-                val |= @ctz(float.bits);
-            },
-            .Int => |int| {
-                comptime if (!std.math.isPowerOfTwo(int.bits)) {
-                    @compileError("int bits have to be powers of two.");
-                };
-                val |= IS_INT_MASK;
-                val |= @ctz(int.bits);
-            },
-            .Vector => |vec| {
-                comptime if (!std.math.isPowerOfTwo(vec.len)) {
-                    @compileError("vector lengths have to be powers of two.");
-                };
-                val |= Type.from(vec.child).val;
-                val |= IS_VECTOR_MASK;
-
-                const size: u16 = @ctz(@as(u16, vec.len));
-                val |= size << 7;
-            },
-            .Pointer => val |= IS_PTR_MASK,
-            else => {}, // void is 0x0 anyway
-        }
-
-        return Type{ .val = val };
-    }
-
-    pub fn invalid_type() Type {
-        return Type{ .val = INVALID_MASK };
-    }
-
-    pub fn log2_bits(self: Type) u3 {
-        return @truncate(self.val & SIZE_MASK);
-    }
-
-    pub fn bits(self: Type) u16 {
-        return @as(u16, 1) << self.log2_bits();
-    }
-
-    pub fn bytes(self: Type) u16 {
-        return (self.bits() + 7) / 8;
-    }
-
-    pub fn log2_lanes(self: Type) u3 {
-        return @intCast((self.val & LANES_MASK) >> 7);
-    }
-
-    pub fn lanes(self: Type) u16 {
-        return @as(u16, 1) << self.log2_lanes();
-    }
-
-    pub fn is_int(self: Type) bool {
-        return self.val & IS_INT_MASK != 0;
-    }
-
-    pub fn is_float(self: Type) bool {
-        return self.val & IS_FLOAT_MASK != 0;
-    }
-
-    pub fn is_ptr(self: Type) bool {
-        return self.val & IS_PTR_MASK != 0;
-    }
-
-    pub fn is_vector(self: Type) bool {
-        return self.val & IS_VECTOR_MASK != 0;
-    }
-
-    pub fn is_valid(self: Type) bool {
-        return self.val != INVALID_MASK;
-    }
+// possible optimization, use [*] and a u8 len becaues we don't have that many registers
+pub const BlockCall = struct {
+    block: BlockRef,
+    args: []ValueRef,
 };
-
-const PTR = Type.from(*i8);
-
-pub const BinOp = struct { lhs: NodeRef, rhs: NodeRef };
 
 pub const Instruction = union(enum) {
     add: BinOp,
@@ -115,10 +26,16 @@ pub const Instruction = union(enum) {
     alloca: struct { size: usize, alignment: usize },
 
     brif: struct {
-        cond: NodeRef,
-        cond_true: NodeRef,
-        cond_false: NodeRef,
-        params: std.ArrayList(NodeRef),
+        cond: ValueRef,
+        cond_true: BlockCall,
+        cond_false: BlockCall,
+    },
+
+    jump: struct { block: BlockRef },
+
+    call: struct {
+        func: FuncRef,
+        args: [*]ValueRef,
     },
 };
 
@@ -158,112 +75,260 @@ pub const Instruction = union(enum) {
 /// ```
 pub fn Egraph(comptime T: type, comptime C: type) type {
     return struct {
-        nodes: std.AutoHashMap(NodeRef, T),
+        nodes: std.AutoHashMap(ValueRef, T),
         allocator: std.mem.Allocator,
 
         pub const EClass = struct {
-            equivalences: std.ArrayList(T),
+            equivalences: std.ArrayListUnmanaged(T),
             ctx: C,
         };
 
         pub fn init(allocator: std.mem.Allocator) @This() {
             return @This(){
-                .nodes = std.AutoHashMap(NodeRef, T).init(allocator),
+                .nodes = std.AutoHashMap(ValueRef, T).init(allocator),
                 .allocator = allocator,
             };
         }
     };
 }
 
-pub const NodeData = union(enum) {
-    alias: struct { to: NodeRef },
-    region: struct {
-        nodes: std.ArrayList(NodeRef), // nodes that use the parameters
-        params: std.ArrayList(Type),
-    },
-    param: struct { idx: usize, region: NodeRef },
-    constant: []const u8,
-    global_value: struct { name: []const u8, initial_value: []const u8 },
-    inst: Instruction,
+pub const ValueRefList = std.ArrayListUnmanaged(ValueRef);
+
+pub const Module = struct {
+    funcs: std.ArrayList(Function),
+    func_decls: std.ArrayList(FunctionDecl),
+    constants: std.ArrayList(Constant),
 };
 
-pub const NodeHasher = struct {
-    graph: *Graph,
+pub const Target = struct {};
 
-    pub fn hash(self: NodeHasher, node_ref: NodeRef) ?u64 {
-        if (self.graph.nodes.get(node_ref)) |node| {
-            return switch (node.data) {
-                .alias => |alias| blk: {
-                    std.debug.assert(alias.to != node_ref);
-                    break :blk self.hash(alias.to);
+pub const Constant = []const u8;
+
+pub const ValueData = union(enum) {
+    alias: struct { to: ValueRef },
+    param: struct { idx: usize, block: BlockRef },
+    global_value: struct { name: []const u8, initial_value: ConstantRef },
+    constant: ConstantRef,
+    inst: InstRef,
+};
+
+pub const Signature = struct {
+    ret: Type,
+    args: std.ArrayListUnmanaged(Type),
+};
+
+pub const FunctionDecl = struct {
+    name: []const u8,
+    signature: Signature,
+};
+
+// var layout = Layout{
+//     .nodes = std.AutoHashMap(BlockRef, BlockNode).init(allocator),
+// };
+//
+// var curr_block: BlockRef = 0;
+//
+// for (func.insts.items, 0..) |inst, inst_ref| {
+//     switch (inst) {
+//         .brif => |brif| {
+//             try layout.addEdge(curr_block, brif.cond_true, @intCast(inst_ref), allocator);
+//             try layout.addEdge(curr_block, brif.cond_false, @intCast(inst_ref), allocator);
+//         },
+//         .jump => |jump| try layout.addEdge(curr_block, jump.block, @intCast(inst_ref), allocator),
+//         else => continue,
+//     }
+//
+//     curr_block += 1;
+// }
+
+pub const BlockNode = struct {
+    // preds: std.ArrayListUnmanaged(BlockRef) = .{},
+    // succs: std.ArrayListUnmanaged(BlockRef) = .{},
+    start: InstRef = 0,
+    end: InstRef = 0,
+};
+
+// um this shouldn't be a cfg, only start/end
+pub const Layout = struct {
+    nodes: std.ArrayListUnmanaged(BlockNode),
+
+    pub fn fromFunction(func: *const Function, allocator: std.mem.Allocator) !Layout {
+        var layout = Layout{ .nodes = std.ArrayListUnmanaged(BlockNode){} };
+
+        var curr_block = BlockNode{};
+
+        for (func.insts.items, 0..) |inst, inst_ref| {
+            switch (inst) {
+                .brif, .jump => {
+                    curr_block.end = @intCast(inst_ref);
+                    try layout.nodes.append(allocator, curr_block);
+                    curr_block = BlockNode{
+                        .start = @intCast(inst_ref + 1),
+                        .end = @intCast(inst_ref + 1),
+                    };
                 },
-                .region => null, // should region nodes be hashed? yes
-                .param => |param| std.hash.Murmur2_64.hash(&std.mem.toBytes(param.idx)) ^ self.hash(param.region).?,
-                .constant => |constant| std.hash.Murmur2_64.hash(constant),
-                .global_value => |gv| std.hash.Murmur2_64.hash(gv.name),
-                .inst => |inst| self.hash_inst(inst),
-            };
+                else => {},
+            }
         }
-        return null;
+
+        return layout;
     }
 
-    fn hash_inst(self: NodeHasher, inst: Instruction) u64 {
-        return switch (inst) {
-            .add, .sub, .mul => |binop| self.hash_binop(binop, inst),
-            else => 0,
+    pub fn entry(self: Layout) !*const BlockNode {
+        try &self.nodes.get(0);
+    }
+
+    fn addEdge(self: *Layout, from: BlockRef, to: BlockRef, curr_inst: InstRef, allocator: std.mem.Allocator) !void {
+        const default_blocknode = BlockNode{ .end = curr_inst };
+
+        var cfg_entry = try self.nodes.getOrPutValue(from, default_blocknode);
+        try cfg_entry.value_ptr.succs.append(allocator, to);
+
+        cfg_entry = try self.nodes.getOrPutValue(to, default_blocknode);
+        try cfg_entry.value_ptr.preds.append(allocator, from);
+    }
+};
+
+const ValueMap = std.AutoHashMap(ValueRef, Value);
+
+pub const FunctionBuilder = struct {
+    func: Function,
+    allocator: std.mem.Allocator,
+    blocks: std.ArrayListUnmanaged(std.ArrayListUnmanaged(ValueRef)) = .{},
+    value_counter: u32 = 0,
+
+    pub fn init(
+        name: []const u8,
+        signature: Signature,
+        allocator: std.mem.Allocator,
+    ) FunctionBuilder {
+        return FunctionBuilder{
+            .func = Function.init(name, signature),
+            .allocator = allocator,
         };
     }
 
-    fn hash_binop(self: NodeHasher, binop: BinOp, op: Instruction) u64 {
-        return self.hash(binop.lhs).? ^ self.hash(binop.rhs).? ^ std.hash.Murmur2_64.hash(&std.mem.toBytes(op));
+    pub fn insert_inst(self: *FunctionBuilder, before: InstRef, inst: Instruction, ty: Type) !InstRef {
+        std.debug.assert(before <= self.func.insts.items.len);
+
+        try self.func.insts.insert(self.allocator, before, inst);
+
+        defer self.value_counter += 1;
+
+        try self.func.values.put(
+            self.allocator,
+            self.value_counter,
+            Value.init(ValueData{ .inst = @intCast(self.func.insts.items.len) }, ty),
+        );
+
+        return @intCast(self.value_counter);
+    }
+
+    pub fn append_inst(self: *FunctionBuilder, inst: Instruction, ty: Type) !InstRef {
+        return self.insert_inst(@intCast(self.func.insts.items.len), inst, ty);
+    }
+
+    pub fn insert_inst_after(self: *FunctionBuilder, after: InstRef, inst: Instruction, ty: Type) !InstRef {
+        return self.insert_inst(after + 1, inst, ty);
+    }
+
+    pub fn append_block(self: *FunctionBuilder) !BlockRef {
+        try self.blocks.append(self.allocator, .{});
+        return @intCast(self.blocks.items.len - 1);
+    }
+
+    pub fn append_block_param(self: *FunctionBuilder, block: BlockRef, ty: Type) !ValueRef {
+        const arg_idx = self.blocks.items[block].items.len;
+
+        defer self.value_counter += 1;
+
+        self.func.values.put(
+            self.allocator,
+            self.value_counter,
+            Value.init(ValueData{ .param = .{
+                .block = block,
+                .idx = arg_idx,
+            } }, ty),
+        );
+
+        try self.blocks.items[block].append(self.value_counter);
+    }
+
+    pub fn build(self: *FunctionBuilder) !Function {
+        std.debug.assert(self.blocks.items.len > 0);
+
+        for (self.blocks.items) |*params| {
+            try self.func.blocks.append(self.allocator, Block{
+                .start = 0,
+                .end = 0,
+                .params = try params.toOwnedSlice(self.allocator),
+            });
+        }
+
+        var block_index: BlockRef = 0;
+
+        for (self.func.insts.items, 0..) |inst, inst_ref| {
+            switch (inst) {
+                .brif, .jump => {
+                    self.func.blocks.items[block_index].end = @intCast(inst_ref);
+
+                    block_index += 1;
+                    self.func.blocks.items[block_index].start = @intCast(inst_ref);
+                },
+                else => {},
+            }
+        }
+
+        return self.func;
     }
 };
 
-pub const Node = struct {
-    uses: std.ArrayList(NodeRef),
-    data: NodeData,
+pub const Function = struct {
+    name: []const u8,
+    signature: Signature,
+    insts: std.ArrayListUnmanaged(Instruction),
+    blocks: std.ArrayListUnmanaged(Block),
+    values: std.AutoHashMapUnmanaged(ValueRef, Value),
+    preamble_end: InstRef = 0,
+    counter: u32 = 0,
+
+    pub fn init(
+        name: []const u8,
+        signature: Signature,
+    ) Function {
+        return Function{
+            .name = name,
+            .signature = signature,
+            .insts = std.ArrayListUnmanaged(Instruction){},
+            .blocks = std.ArrayListUnmanaged(Block){},
+            .values = std.AutoHashMapUnmanaged(ValueRef, Value){},
+        };
+    }
+};
+
+pub const Block = struct {
+    params: []ValueRef,
+
+    // both are inclusive
+    start: InstRef,
+    end: InstRef,
+};
+
+pub const Value = struct {
+    // uses: std.ArrayList(Value),
+    data: ValueData,
     ty: Type,
 
-    pub fn init(data: NodeData, ty: Type, alloc: std.mem.Allocator) Node {
-        return Node{
-            .uses = std.ArrayList(NodeRef).init(alloc),
+    pub fn init(data: ValueData, ty: Type) Value {
+        return Value{
+            // .uses = ValueRefList.init(alloc),
             .data = data,
             .ty = ty,
         };
     }
 
-    pub fn deinit(self: Node) void {
+    pub fn deinit(self: Value) void {
         self.uses.deinit();
-    }
-};
-
-pub const Graph = struct {
-    nodes: std.AutoHashMap(NodeRef, Node),
-    counter: u32,
-    alloc: std.mem.Allocator,
-
-    pub fn init(alloc: std.mem.Allocator) Graph {
-        return Graph{
-            .nodes = std.AutoHashMap(NodeRef, Node).init(alloc),
-            .counter = 0,
-            .alloc = alloc,
-        };
-    }
-
-    pub fn add_node(self: *Graph, node_data: NodeData, ty: Type) !NodeRef {
-        defer self.counter += 1;
-        try self.nodes.put(self.counter, Node.init(node_data, ty, self.alloc));
-
-        return self.counter;
-    }
-
-    pub fn deinit(self: *Graph) void {
-        var iter = self.nodes.iterator();
-        while (iter.next()) |kv| {
-            kv.value_ptr.deinit();
-        }
-
-        self.nodes.deinit();
     }
 };
 
@@ -271,18 +336,16 @@ pub const VerifierError = struct {
     ty: enum {
         Typecheck,
     },
-    loc: NodeRef,
+    loc: ValueRef,
     message: []const u8,
 };
 
 pub const Verifier = struct {
-    graph: *const Graph,
+    // graph: *const Graph,
 
     pub const ErrorStack = std.ArrayList(VerifierError);
 
-    pub fn init(graph: *Graph) Verifier {
-        return Verifier{ .graph = graph };
-    }
+    pub fn init() Verifier {}
 
     pub fn verify(self: *Verifier, error_stack: *ErrorStack) bool {
         var iter = self.graph.nodes.iterator();
@@ -291,7 +354,7 @@ pub const Verifier = struct {
         }
     }
 
-    fn typecheck(self: Verifier, node: NodeRef, error_stack: *ErrorStack) !void {
+    fn typecheck(self: Verifier, node: ValueRef, error_stack: *ErrorStack) !void {
         _ = self;
 
         try error_stack.append(VerifierError{
@@ -302,52 +365,23 @@ pub const Verifier = struct {
     }
 };
 
-const poop = union {};
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var alloc = gpa.allocator();
 
-    var graph = Graph.init(alloc);
-    defer graph.deinit();
+    var func = FunctionBuilder.init("main", Signature{
+        .ret = types.I32,
+        .args = std.ArrayListUnmanaged(Type){},
+    }, alloc);
 
-    var const1 = try graph.add_node(.{ .constant = &[_]u8{ 1, 2, 3 } }, Type.from(*i8));
-    var gv1 = try graph.add_node(.{ .global_value = .{
-        .name = "hello",
-        .initial_value = &[_]u8{ 1, 2, 3 },
-    } }, Type.from(*i8));
+    var block_sig = try alloc.alloc(types.Type, 1);
+    block_sig[0] = types.I32;
 
-    var add = try graph.add_node(.{ .inst = .{
-        .add = .{ .lhs = const1, .rhs = gv1 },
-    } }, PTR);
+    _ = try func.append_block();
 
-    std.log.info("{?}", .{graph.nodes.get(add)});
-
-    var egraph = Egraph(poop, ?*Node).init(alloc);
-    _ = egraph;
-
-    // var verifier = Verifier.init(&graph);
-    // var errors = Verifier.ErrorStack.init(alloc);
-
-    // _ = try verifier.typecheck(add, &errors);
-    // _ = try verifier.verify(add, &errors);
-}
-
-test "types" {
-    const iv = Type.from(@Vector(4, i32));
-    try std.testing.expect(iv.is_valid());
-    try std.testing.expect(iv.is_vector());
-    try std.testing.expect(iv.lanes() == 4);
-    try std.testing.expect(iv.bits() == 32);
-    try std.testing.expect(iv.bytes() == 4);
-    try std.testing.expect(!iv.is_ptr());
-    try std.testing.expect(!iv.is_float());
-
-    const f = Type.from(f64);
-    try std.testing.expect(f.is_valid());
-    try std.testing.expect(f.is_float());
-    try std.testing.expect(!f.is_vector());
-    try std.testing.expect(!f.is_ptr());
-    try std.testing.expect(f.bits() == 64);
-    try std.testing.expect(f.bytes() == 8);
+    _ = try func.append_inst(Instruction{ .add = .{ .lhs = 0, .rhs = 1 } }, types.I32);
+    var block1 = try func.append_block();
+    _ = try func.append_inst(Instruction{ .jump = .{ .block = block1 } }, types.VOID);
+    std.log.info("{}", .{(try func.build()).blocks});
+    std.log.info("{}", .{@sizeOf(Instruction)});
 }
