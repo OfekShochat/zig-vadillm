@@ -54,6 +54,27 @@ pub const Type = struct {
         return Type{ .val = val };
     }
 
+    pub fn format(
+        value: Type,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        if (value.is_float()) {
+            try writer.print("f{}", .{value.size_bits()});
+        } else if (value.is_int()) {
+            try writer.print("i{}", .{value.size_bits()});
+        } else if (value.is_ptr()) {
+            try writer.print("ptr", .{});
+        } else if (value.is_void()) {
+            try writer.print("void", .{});
+        }
+
+        if (value.is_vector()) {
+            try writer.print("x{}", .{value.lanes()});
+        }
+    }
+
     pub fn invalid_type() Type {
         return Type{ .val = INVALID_MASK };
     }
@@ -62,12 +83,12 @@ pub const Type = struct {
         return @truncate(self.val & SIZE_MASK);
     }
 
-    pub fn bits(self: Type) u16 {
+    pub fn size_bits(self: Type) u16 {
         return @as(u16, 1) << self.log2_bits();
     }
 
-    pub fn bytes(self: Type) u16 {
-        return (self.bits() + 7) / 8;
+    pub fn size_bytes(self: Type) u16 {
+        return (self.size_bits() + 7) / 8;
     }
 
     pub fn log2_lanes(self: Type) u3 {
@@ -119,8 +140,8 @@ test "types" {
     try std.testing.expect(iv.is_valid());
     try std.testing.expect(iv.is_vector());
     try std.testing.expectEqual(@as(u16, 4), iv.lanes());
-    try std.testing.expectEqual(@as(u16, 32), iv.bits());
-    try std.testing.expectEqual(@as(u16, 4), iv.bytes());
+    try std.testing.expectEqual(@as(u16, 32), iv.size_bits());
+    try std.testing.expectEqual(@as(u16, 4), iv.size_bytes());
     try std.testing.expect(!iv.is_ptr());
     try std.testing.expect(!iv.is_float());
 
@@ -129,8 +150,8 @@ test "types" {
     try std.testing.expect(f.is_float());
     try std.testing.expect(!f.is_vector());
     try std.testing.expect(!f.is_ptr());
-    try std.testing.expectEqual(@as(u16, 64), f.bits());
-    try std.testing.expectEqual(@as(u16, 8), f.bytes());
+    try std.testing.expectEqual(@as(u16, 64), f.size_bits());
+    try std.testing.expectEqual(@as(u16, 8), f.size_bytes());
 
     const v = VOID;
     try std.testing.expect(v.is_valid());
@@ -138,6 +159,6 @@ test "types" {
     try std.testing.expect(!v.is_vector());
     try std.testing.expect(!v.is_ptr());
     try std.testing.expect(!v.is_ptr());
-    try std.testing.expectEqual(@as(u16, 1), v.bits());
-    try std.testing.expectEqual(@as(u16, 1), v.bytes());
+    try std.testing.expectEqual(@as(u16, 1), v.size_bits());
+    try std.testing.expectEqual(@as(u16, 1), v.size_bytes());
 }
