@@ -145,75 +145,40 @@ pub const FunctionDecl = struct {
     name: []const u8,
     signature: Signature,
 };
-
-// var layout = Layout{
-//     .nodes = std.AutoHashMap(BlockRef, BlockNode).init(allocator),
-// };
-//
-// var curr_block: BlockRef = 0;
-//
-// for (func.insts.items, 0..) |inst, inst_ref| {
-//     switch (inst) {
-//         .brif => |brif| {
-//             try layout.addEdge(curr_block, brif.cond_true, @intCast(inst_ref), allocator);
-//             try layout.addEdge(curr_block, brif.cond_false, @intCast(inst_ref), allocator);
-//         },
-//         .jump => |jump| try layout.addEdge(curr_block, jump.block, @intCast(inst_ref), allocator),
-//         else => continue,
-//     }
-//
-//     curr_block += 1;
-// }
-
-pub const BlockNode = struct {
-    // preds: std.ArrayListUnmanaged(BlockRef) = .{},
-    // succs: std.ArrayListUnmanaged(BlockRef) = .{},
-    start: InstRef = 0,
-    end: InstRef = 0,
+pub const CFGNode = struct {
+    preds: std.ArrayListUnmanaged(BlockRef) = .{},
+    succs: std.ArrayListUnmanaged(BlockRef) = .{},
 };
 
-// um this shouldn't be a cfg, only start/end
-// pub const Layout = struct {
-//     nodes: std.ArrayListUnmanaged(BlockNode),
+pub const ControlFlowGraph = struct {
+    nodes: std.ArrayListUnmanaged(CFGNode),
 
-//     pub fn fromFunction(func: *const Function, allocator: std.mem.Allocator) !Layout {
-//         var layout = Layout{ .nodes = std.ArrayListUnmanaged(BlockNode){} };
+    pub fn fromFunction(func: *const Function, allocator: std.mem.Allocator) !ControlFlowGraph {
+        var cfg = ControlFlowGraph{};
 
-//         var curr_block = BlockNode{};
+        var iter = func.blocks.iterator();
+        while (iter.next()) |kv| {
+            switch (kv.value_ptr.getTerminator()) {
+                .brif => |brif| {
+                    cfg.addEdge(allocator, kv.key_ptr, brif.cond_true);
+                    cfg.addEdge(allocator, kv.key_ptr, brif.cond_false);
+                },
+                .jump => |jump| cfg.addEdge(allocator, kv.key_ptr, jump.block),
+                else => {},
+            }
+        }
 
-//         for (func.insts.items, 0..) |inst, inst_ref| {
-//             switch (inst) {
-//                 .brif, .jump => {
-//                     curr_block.end = @intCast(inst_ref);
-//                     try layout.nodes.append(allocator, curr_block);
-//                     curr_block = BlockNode{
-//                         .start = @intCast(inst_ref + 1),
-//                         .end = @intCast(inst_ref + 1),
-//                     };
-//                 },
-//                 else => {},
-//             }
-//         }
+        return cfg;
+    }
 
-//         return layout;
-//     }
+    fn addEdge(self: *ControlFlowGraph, allocator: std.mem.Allocator, from: BlockRef, to: BlockRef) !void {
+        var cfg_entry = try self.nodes.getOrPutValue(from, CFGNode{});
+        try cfg_entry.value_ptr.succs.append(allocator, to);
 
-//     pub fn entry(self: Layout) !*const BlockNode {
-//         try &self.nodes.get(0);
-//     }
-
-//     fn addEdge(self: *Layout, from: BlockRef, to: BlockRef, curr_inst: InstRef, allocator: std.mem.Allocator) !void {
-//         const default_blocknode = BlockNode{ .end = curr_inst };
-
-//         var cfg_entry = try self.nodes.getOrPutValue(from, default_blocknode);
-//         try cfg_entry.value_ptr.succs.append(allocator, to);
-
-//         cfg_entry = try self.nodes.getOrPutValue(to, default_blocknode);
-//         try cfg_entry.value_ptr.preds.append(allocator, from);
-//     }
-// };
-
-// const ValueMap = std.AutoHashMap(ValueRef, Value);
+        cfg_entry = try self.nodes.getOrPutValue(to, CFGNode{});
+        try cfg_entry.value_ptr.preds.append(allocator, from);
+    }
+};
 
 pub const FunctionBuilder = struct {
     func: Function,
@@ -275,7 +240,7 @@ pub const Function = struct {
 
         var iter = self.blocks.iterator();
         while (iter.next()) |kv| {
-            try kv.value_ptr.formata(kv.key_ptr.*, writer);
+            try kv.value_ptr.format(kv.key_ptr.*, writer);
         }
     }
 
@@ -350,7 +315,7 @@ pub const Block = struct {
         self.values.deinit(allocator);
     }
 
-    pub fn formata(self: *const Block, ref: BlockRef, writer: anytype) !void {
+    pub fn format(self: *const Block, ref: BlockRef, writer: anytype) !void {
         try writer.print("block{}(", .{ref});
         for (self.params.items, 0..) |param_ref, i| {
             try writer.print("{}", .{self.values.get(param_ref).?.ty});
@@ -361,8 +326,6 @@ pub const Block = struct {
         }
 
         try writer.writeAll("):\n");
-
-        // try writer.print("die {?}", .{ self.values.get(3)});
 
         var iter = self.values.iterator();
         while (iter.next()) |kv| {
@@ -410,6 +373,10 @@ pub const Block = struct {
             allocator,
             Value.init(ValueData{ .inst = @intCast(before) }, ty),
         );
+    }
+
+    pub fn getTerminator(self: Block) ?Instruction {
+        return self.insts.getLastOrNull();
     }
 };
 
