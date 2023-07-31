@@ -334,7 +334,7 @@ pub const ValuePool = struct {
         return self.value_counter;
     }
 
-    pub fn iterator(self: ValuePool) ValueMap.Iterator {
+    pub fn iterator(self: *const ValuePool) ValueMap.Iterator {
         return self.values.iterator();
     }
 };
@@ -366,7 +366,6 @@ pub const Block = struct {
 
         var iter = self.values.iterator();
         while (iter.next()) |kv| {
-            try writer.print("{*} {}", .{ kv.key_ptr, kv.value_ptr.data });
             try writer.print("v{} = {} {}", .{ kv.key_ptr.*, kv.value_ptr.ty, kv.value_ptr.data });
         }
     }
@@ -499,51 +498,4 @@ pub fn main() !void {
     std.log.info("{any}", .{func.blocks.get(0).?.insts.items});
     std.log.info("{any}", .{func.blocks.get(0).?.values.get(ret).?.data});
     std.log.info("{any}", .{func});
-    // var block = Block{.params = alloc.alloc(Type, 1){types.I32}};
-    // const a = try block.appendInst(Instruction{ .add = .{ .lhs = 0, .rhs = 1 } }, types.I32);
-    // var block1 = try func.append_block();
-    // _ = try func.append_inst(Instruction{ .jump = .{ .block = block1 } }, types.VOID);
-    // std.log.info("{}", .{@sizeOf(Instruction)});
-}
-
-test "wtf" {
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // var alloc = gpa.allocator();
-    var alloc = std.testing.allocator;
-
-    var func = Function.init("add", Signature{
-        .ret = types.I32,
-        .args = .{},
-    });
-
-    defer func.deinit(alloc);
-
-
-    try func.appendParam(alloc, types.I32);
-
-    const b = try func.appendBlock(alloc);
-    std.log.info("{any}", .{func});
-    std.log.info("a", .{});
-    const p1 = try func.appendBlockParam(alloc, b, types.I32);
-    std.log.info("{any}", .{func});
-    std.log.info("a", .{});
-    const p2 = try func.appendBlockParam(alloc, b, types.I32);
-
-    const val = try func.appendInst(
-        alloc,
-        b,
-        Instruction{ .add = .{ .lhs = p1, .rhs = p2 } },
-        types.I32,
-    );
-    std.log.info("{any}", .{func});
-    std.log.info("a", .{});
-
-    _ = try func.appendInst(
-        alloc,
-        b,
-        Instruction{ .ret = val },
-        types.I32,
-    );
-
-    std.log.err("{any}", .{func});
 }
