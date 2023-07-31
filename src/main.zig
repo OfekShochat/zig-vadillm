@@ -180,28 +180,6 @@ pub const ControlFlowGraph = struct {
     }
 };
 
-pub const FunctionBuilder = struct {
-    func: Function,
-    allocator: std.mem.Allocator,
-    blocks: std.ArrayListUnmanaged(Block) = .{},
-    value_counter: u32 = 0,
-
-    pub fn init(
-        name: []const u8,
-        signature: Signature,
-        allocator: std.mem.Allocator,
-    ) FunctionBuilder {
-        return FunctionBuilder{
-            .func = Function.init(name, signature),
-            .allocator = allocator,
-        };
-    }
-
-    pub fn build(self: *FunctionBuilder) !Function {
-        return self.func;
-    }
-};
-
 pub const Function = struct {
     name: []const u8,
     signature: Signature,
