@@ -78,8 +78,55 @@ pub fn computePostorder(self: *DominatorTree, allocator: mem.Allocator, cfg: *co
         // mark the block as visited for the second pass
         try stack.append(.{ .block_ref = curr_entry.block_ref, .visited = .Once });
 
-        for (cfg_node.succs.items) |succ| {
+        for (cfg_node.succs.iter()) |succ| {
             try stack.append(.{ .block_ref = succ, .visited = .None });
+        }
+    }
+}
+
+fn updateDominators(self: *DominatorTree, current_block: BlockRef, cfg: *const ControlFlowGraph) struct { val: BlockRef, changed: bool } {
+    var new_idom = self.nodes.get(current_block).idom;
+    std.debug.assert(new_idom); // rpo ensures that at least one parent is visited before a child
+
+    var preds = &cfg.get_node(current_block).preds;
+    for (preds.iter()) |pred| {
+        // if pred is different and reachable (entry block would've been found before),
+        // set the common acenstor as the dominator
+        if (pred != new_idom and self.nodes.get(pred).idom != null) {
+            new_idom = self.commonDominatingAncestor(pred, new_idom);
+        }
+    }
+
+    return .{
+        .val = new_idom,
+        .changed = self.nodes.get(current_block).idom != new_idom,
+    };
+}
+
+fn computeDomtree(self: DominatorTree, cfg: *const ControlFlowGraph, func: *const Function) void {
+    const entry_ref = func.entry_block();
+
+    self.computeInitialState(cfg, entry_ref);
+
+    var changed = true;
+
+    // unless the cfg has an an irreducible control flow, such as a loop with two entry points,
+    // this should exit after one iteration
+    while (changed) {
+        changed = false;
+
+        var iter = self.reversePostorderIter();
+        while (iter.next()) |block_ref| {
+            if (block_ref == entry_ref) {
+                continue;
+            }
+
+            const new_idom = self.updateDominators(block_ref, cfg);
+
+            if (new_idom.changed) {
+                self.nodes.get(block_ref).idom = new_idom.val;
+                changed = true;
+            }
         }
     }
 }
@@ -103,6 +150,28 @@ fn computeInitialState(self: DominatorTree, allocator: mem.Allocator, cfg: *cons
 
         rpo_order += 1;
     }
+}
+
+/// finds intersection point of dominators
+fn commonDominatingAncestor(self: DominatorTree, block1: BlockRef, block2: BlockRef) BlockRef {
+    while (true) {
+        const node1 = self.nodes.get(block1);
+        const node2 = self.nodes.get(block2);
+
+        if (node1.rpo_order < node2.rpo_order) {
+            // node1 comes before node2 (in rpo), move finger2 (node2) up
+            std.debug.assert(node2.idom); // reachable block that is unreachable
+            block2 = node2.idom;
+        } else if (node1.rpo_order > node2.rpo_order) {
+            // node2 comes before node1 (in rpo), move finger1 (node1) up
+            std.debug.assert(node1.idom); //  reachable block that is unreachable
+            block1 = node1.idom;
+        } else {
+            break;
+        }
+    }
+
+    return block1;
 }
 
 pub fn reversePostorderIter(self: *const DominatorTree) RPOIterator {

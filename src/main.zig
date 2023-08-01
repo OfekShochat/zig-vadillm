@@ -140,13 +140,31 @@ pub const Signature = struct {
     }
 };
 
+pub fn HashSet(comptime T: type) type {
+    return struct {
+        inner: std.AutoArrayHashMapUnmanaged(T, void) = .{},
+
+        pub fn put(self: *@This(), allocator: std.mem.Allocator, val: T) !void {
+            return self.inner.put(allocator, val, void{});
+        }
+
+        pub fn contains(self: @This(), key: T) bool {
+            return self.inner.contains(key);
+        }
+
+        pub fn iter(self: @This()) []T {
+            return self.inner.keys();
+        }
+    };
+}
+
 pub const FunctionDecl = struct {
     name: []const u8,
     signature: Signature,
 };
 pub const CFGNode = struct {
-    preds: std.ArrayListUnmanaged(BlockRef) = .{},
-    succs: std.ArrayListUnmanaged(BlockRef) = .{},
+    preds: HashSet(BlockRef) = .{},
+    succs: HashSet(BlockRef) = .{},
 };
 
 pub const ControlFlowGraph = struct {
@@ -173,10 +191,10 @@ pub const ControlFlowGraph = struct {
     fn addEdge(self: *ControlFlowGraph, allocator: std.mem.Allocator, from: BlockRef, to: BlockRef) !void {
         std.log.debug("cfg edge: {} {}", .{ from, to });
         var cfg_entry = try self.nodes.getOrPutValue(allocator, from, CFGNode{});
-        try cfg_entry.value_ptr.succs.append(allocator, to);
+        try cfg_entry.value_ptr.succs.put(allocator, to);
 
         cfg_entry = try self.nodes.getOrPutValue(allocator, to, CFGNode{});
-        try cfg_entry.value_ptr.preds.append(allocator, from);
+        try cfg_entry.value_ptr.preds.put(allocator, from);
     }
 
     pub fn get(self: ControlFlowGraph, block_ref: BlockRef) ?*const CFGNode {
