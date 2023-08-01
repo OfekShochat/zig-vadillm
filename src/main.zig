@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const Type = @import("types.zig").Type;
 const mem = std.mem;
+const a = @import("DominatorTree.zig");
 
 pub const ValueRef = u32;
 pub const BlockRef = u32;
@@ -95,8 +96,6 @@ pub fn Egraph(comptime T: type, comptime C: type) type {
     };
 }
 
-pub const ValueRefList = std.ArrayListUnmanaged(ValueRef);
-
 pub const Module = struct {
     funcs: std.ArrayList(Function),
     func_decls: std.ArrayList(FunctionDecl),
@@ -151,20 +150,20 @@ pub const CFGNode = struct {
 };
 
 pub const ControlFlowGraph = struct {
-    nodes: std.ArrayListUnmanaged(CFGNode),
+    nodes: std.AutoHashMapUnmanaged(BlockRef, CFGNode) = .{},
 
-    pub fn fromFunction(func: *const Function, allocator: std.mem.Allocator) !ControlFlowGraph {
+    pub fn fromFunction(allocator: std.mem.Allocator, func: *const Function) !ControlFlowGraph {
         var cfg = ControlFlowGraph{};
 
         var iter = func.blocks.iterator();
         while (iter.next()) |kv| {
             switch (kv.value_ptr.getTerminator()) {
                 .brif => |brif| {
-                    cfg.addEdge(allocator, kv.key_ptr, brif.cond_true);
-                    cfg.addEdge(allocator, kv.key_ptr, brif.cond_false);
+                    try cfg.addEdge(allocator, kv.key_ptr.*, brif.cond_true.block);
+                    try cfg.addEdge(allocator, kv.key_ptr.*, brif.cond_false.block);
                 },
-                .jump => |jump| cfg.addEdge(allocator, kv.key_ptr, jump.block),
-                else => {},
+                .jump => |jump| try cfg.addEdge(allocator, kv.key_ptr.*, jump.block),
+                else => try cfg.nodes.put(allocator, kv.key_ptr.*, CFGNode{}),
             }
         }
 
@@ -172,11 +171,16 @@ pub const ControlFlowGraph = struct {
     }
 
     fn addEdge(self: *ControlFlowGraph, allocator: std.mem.Allocator, from: BlockRef, to: BlockRef) !void {
-        var cfg_entry = try self.nodes.getOrPutValue(from, CFGNode{});
+        std.log.debug("cfg edge: {} {}", .{ from, to });
+        var cfg_entry = try self.nodes.getOrPutValue(allocator, from, CFGNode{});
         try cfg_entry.value_ptr.succs.append(allocator, to);
 
-        cfg_entry = try self.nodes.getOrPutValue(to, CFGNode{});
+        cfg_entry = try self.nodes.getOrPutValue(allocator, to, CFGNode{});
         try cfg_entry.value_ptr.preds.append(allocator, from);
+    }
+
+    pub fn get(self: ControlFlowGraph, block_ref: BlockRef) ?*const CFGNode {
+        return self.nodes.getPtr(block_ref);
     }
 };
 
@@ -185,6 +189,7 @@ pub const Function = struct {
     signature: Signature,
     blocks: std.AutoHashMapUnmanaged(BlockRef, Block) = .{},
     block_counter: BlockRef = 0,
+    entry_ref: BlockRef = 0,
 
     pub fn init(
         name: []const u8,
@@ -222,9 +227,12 @@ pub const Function = struct {
         }
     }
 
+    pub fn entryBlock(self: Function) BlockRef {
+        return self.entry_ref;
+    }
+
     pub fn appendBlock(self: *Function, allocator: mem.Allocator) mem.Allocator.Error!BlockRef {
         defer self.block_counter += 1;
-
         try self.blocks.put(allocator, self.block_counter, Block{});
 
         return self.block_counter;
@@ -237,10 +245,11 @@ pub const Function = struct {
         inst: Instruction,
         ty: Type,
     ) mem.Allocator.Error!ValueRef {
-        var block = self.blocks.getPtr(block_ref);
-        std.debug.assert(block != null);
+        if (self.blocks.getPtr(block_ref)) |block| {
+            return block.appendInst(allocator, inst, ty);
+        }
 
-        return block.?.appendInst(allocator, inst, ty);
+        unreachable;
     }
 
     pub fn appendBlockParam(self: *Function, allocator: mem.Allocator, block_ref: BlockRef, ty: Type) mem.Allocator.Error!ValueRef {
@@ -260,7 +269,7 @@ pub const ValuePool = struct {
     values: ValueMap = .{},
     value_counter: ValueRef = 0,
 
-    const ValueMap = std.AutoHashMapUnmanaged(ValueRef, Value);
+    const ValueMap = std.AutoArrayHashMapUnmanaged(ValueRef, Value);
 
     pub fn deinit(self: *ValuePool, allocator: mem.Allocator) void {
         self.values.deinit(allocator);
@@ -307,7 +316,7 @@ pub const Block = struct {
 
         var iter = self.values.iterator();
         while (iter.next()) |kv| {
-            try writer.print("v{} = {} {}", .{ kv.key_ptr.*, kv.value_ptr.ty, kv.value_ptr.data });
+            try writer.print("v{} = {} {}\n", .{ kv.key_ptr.*, kv.value_ptr.ty, kv.value_ptr.data });
         }
     }
 
@@ -353,8 +362,8 @@ pub const Block = struct {
         );
     }
 
-    pub fn getTerminator(self: Block) ?Instruction {
-        return self.insts.getLastOrNull();
+    pub fn getTerminator(self: Block) Instruction {
+        return self.insts.getLast();
     }
 };
 
@@ -417,30 +426,30 @@ pub fn main() !void {
     try func.appendParam(alloc, types.I32);
 
     const b = try func.appendBlock(alloc);
-    std.log.info("{any}", .{func});
-    std.log.info("a", .{});
-    const p1 = try func.appendBlockParam(alloc, b, types.I32);
-    std.log.info("{any}", .{func});
-    std.log.info("a", .{});
-    const p2 = try func.appendBlockParam(alloc, b, types.I32);
-
-    const val = try func.appendInst(
+    const b2 = try func.appendBlock(alloc);
+    _ = try func.appendInst(
         alloc,
         b,
-        Instruction{ .add = .{ .lhs = p1, .rhs = p2 } },
+        Instruction{ .jump = .{ .block = b2 } },
         types.I32,
     );
-    std.log.info("{any}", .{func});
-    std.log.info("a", .{});
+
+    const p1 = try func.appendBlockParam(alloc, b, types.I32);
 
     const ret = try func.appendInst(
         alloc,
-        b,
-        Instruction{ .ret = val },
+        b2,
+        Instruction{ .ret = p1 },
         types.I32,
     );
 
+    const cfg = try ControlFlowGraph.fromFunction(alloc, &func);
     std.log.info("{any}", .{func.blocks.get(0).?.insts.items});
     std.log.info("{any}", .{func.blocks.get(0).?.values.get(ret).?.data});
     std.log.info("{any}", .{func});
+    std.log.info("{any}", .{cfg});
+
+    var domtree = a{};
+    try domtree.computePostorder(alloc, &cfg, &func);
+    std.log.info("{any}", .{domtree.formatter(&func)});
 }
