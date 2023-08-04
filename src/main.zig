@@ -9,6 +9,7 @@ pub const BlockRef = u32;
 pub const FuncRef = u32;
 pub const InstRef = u32;
 pub const ConstantRef = u32;
+pub const GlobalValueRef = u32;
 
 pub const BinOp = struct { lhs: ValueRef, rhs: ValueRef };
 
@@ -18,12 +19,39 @@ pub const BlockCall = struct {
     args: []ValueRef,
 };
 
+pub const CondCode = enum {
+    /// `==`
+    Equal,
+    /// `!=`
+    NotEqual,
+    /// signed `<`
+    SignedLessThan,
+    /// signed `>=`
+    SignedGreaterThanOrEqual,
+    /// signed `>`
+    SignedGreaterThan,
+    /// signed `<=`
+    SignedLessThanOrEqual,
+    /// unsigned `<`
+    UnsignedLessThan,
+    /// unsigned `>=`
+    UnsignedGreaterThanOrEqual,
+    /// unsigned `>`
+    UnsignedGreaterThan,
+    /// unsigned `<=`
+    UnsignedLessThanOrEqual,
+};
+
 pub const Instruction = union(enum) {
     add: BinOp,
     sub: BinOp,
     mul: BinOp,
     shl: BinOp,
     shr: BinOp,
+
+    imm: Constant,
+
+    icmp: struct { cond_code: CondCode, lhs: ValueRef, rhs: ValueRef },
 
     alloca: struct { size: usize, alignment: usize },
 
@@ -38,9 +66,9 @@ pub const Instruction = union(enum) {
         cond_false: BlockCall,
     },
 
-    jump: struct { block: BlockRef },
+    jump: BlockCall,
 
-    ret: ValueRef,
+    ret: ?ValueRef,
 };
 
 /// An Egraph representation.
@@ -96,11 +124,49 @@ pub fn Egraph(comptime T: type, comptime C: type) type {
     };
 }
 
-pub const Module = struct {
-    funcs: std.ArrayList(Function),
-    func_decls: std.ArrayList(FunctionDecl),
-    constants: std.ArrayList(Constant),
+pub const GlobalValue = struct {
+    name: []const u8,
+    initial_value: ConstantRef,
 };
+
+// pub const Module = struct {
+//     funcs: std.ArrayList(Function),
+//     func_decls: HashSet(FunctionDecl),
+//     constants: std.ArrayList(Constant),
+//     global_values: std.ArrayList(GlobalValue),
+//     allocator: mem.Allocator,
+//
+//     pub fn init(allocator: mem.Allocator) !void {
+//         return Module{
+//             .funcs = std.ArrayList(Function).init(allocator),
+//             .func_decls = std.ArrayList(FunctionDecl).init(allocator),
+//             .constants = std.ArrayList(Constant).init(allocator),
+//             .global_values = std.ArrayList(GlobalValue).init(allocator),
+//             .allocator = allocator,
+//         };
+//     }
+//
+//     pub fn deinit(self: *Module) void {
+//         for (self.funcs.items) |func| {
+//             func.deinit();
+//         }
+//         self.funcs.deinit();
+//         self.func_decls.deinit();
+//         self.constants.deinit();
+//         self.global_values.deinit();
+//     }
+//
+//     pub fn declareFunction(self: *Module, name: []const u8, signature: Signature) !void {
+//         return self.func_decls.put(
+//             self.allocator,
+//             FunctionDecl{ .name = name, .signature = signature },
+//         );
+//     }
+//
+//     pub fn defineFunction(self: *Module, func: Function) !void {
+//         return self.funcs.append(func);
+//     }
+// };
 
 pub const Target = struct {};
 
@@ -109,7 +175,7 @@ pub const Constant = []const u8;
 pub const ValueData = union(enum) {
     alias: struct { to: ValueRef },
     param: struct { idx: usize },
-    global_value: struct { name: []const u8, initial_value: ConstantRef },
+    global_value: GlobalValueRef,
     constant: ConstantRef,
     inst: InstRef,
 };
@@ -144,6 +210,10 @@ pub fn HashSet(comptime T: type) type {
     return struct {
         inner: std.AutoArrayHashMapUnmanaged(T, void) = .{},
 
+        pub fn deinit(self: *@This(), allocator: mem.Allocator) void {
+            self.inner.deinit(allocator);
+        }
+
         pub fn put(self: *@This(), allocator: std.mem.Allocator, val: T) !void {
             return self.inner.put(allocator, val, void{});
         }
@@ -152,7 +222,7 @@ pub fn HashSet(comptime T: type) type {
             return self.inner.contains(key);
         }
 
-        pub fn iter(self: @This()) []T {
+        pub fn iter(self: *const @This()) []T {
             return self.inner.keys();
         }
     };
@@ -168,9 +238,10 @@ pub const CFGNode = struct {
 };
 
 pub const ControlFlowGraph = struct {
+    // TODO: transition to arrayhashmap
     nodes: std.AutoHashMapUnmanaged(BlockRef, CFGNode) = .{},
 
-    pub fn fromFunction(allocator: std.mem.Allocator, func: *const Function) !ControlFlowGraph {
+    pub fn fromFunction(allocator: mem.Allocator, func: *const Function) !ControlFlowGraph {
         var cfg = ControlFlowGraph{};
 
         var iter = func.blocks.iterator();
@@ -181,15 +252,26 @@ pub const ControlFlowGraph = struct {
                     try cfg.addEdge(allocator, kv.key_ptr.*, brif.cond_false.block);
                 },
                 .jump => |jump| try cfg.addEdge(allocator, kv.key_ptr.*, jump.block),
-                else => try cfg.nodes.put(allocator, kv.key_ptr.*, CFGNode{}),
+                else => {},
+                // else => try cfg.nodes.put(allocator, kv.key_ptr.*, CFGNode{}),
             }
         }
 
         return cfg;
     }
 
+    pub fn deinit(self: *ControlFlowGraph, allocator: mem.Allocator) void {
+        var iter = self.nodes.valueIterator();
+        while (iter.next()) |node| {
+            node.preds.deinit(allocator);
+            node.succs.deinit(allocator);
+        }
+        self.nodes.deinit(allocator);
+    }
+
     fn addEdge(self: *ControlFlowGraph, allocator: std.mem.Allocator, from: BlockRef, to: BlockRef) !void {
         std.log.debug("cfg edge: {} {}", .{ from, to });
+
         var cfg_entry = try self.nodes.getOrPutValue(allocator, from, CFGNode{});
         try cfg_entry.value_ptr.succs.put(allocator, to);
 
@@ -205,23 +287,26 @@ pub const ControlFlowGraph = struct {
 pub const Function = struct {
     name: []const u8,
     signature: Signature,
-    blocks: std.AutoHashMapUnmanaged(BlockRef, Block) = .{},
-    block_counter: BlockRef = 0,
+    allocator: mem.Allocator,
+    blocks: std.AutoArrayHashMapUnmanaged(BlockRef, Block) = .{},
+    values: ValuePool = .{},
     entry_ref: BlockRef = 0,
+    block_counter: BlockRef = 0,
 
     pub fn init(
+        allocator: mem.Allocator,
         name: []const u8,
         signature: Signature,
     ) Function {
         return Function{
             .name = name,
             .signature = signature,
+            .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Function, allocator: mem.Allocator) void {
-        var iter = self.blocks.valueIterator();
-        while (iter.next()) |b| {
+        for (self.blocks.entries.items(.value)) |*b| {
             b.deinit(allocator);
         }
 
@@ -241,7 +326,7 @@ pub const Function = struct {
 
         var iter = self.blocks.iterator();
         while (iter.next()) |kv| {
-            try kv.value_ptr.format(kv.key_ptr.*, writer);
+            try kv.value_ptr.print(&self.values, kv.key_ptr.*, writer);
         }
     }
 
@@ -256,6 +341,14 @@ pub const Function = struct {
         return self.block_counter;
     }
 
+    pub fn addValue(self: *Function, value: Value) !ValueRef {
+        return self.values.put(value);
+    }
+
+    pub fn getValue(self: *Function, value_ref: ValueRef) !?*Value {
+        return self.values.getPtr(value_ref);
+    }
+
     pub fn appendInst(
         self: *Function,
         allocator: mem.Allocator,
@@ -264,7 +357,7 @@ pub const Function = struct {
         ty: Type,
     ) mem.Allocator.Error!ValueRef {
         if (self.blocks.getPtr(block_ref)) |block| {
-            return block.appendInst(allocator, inst, ty);
+            return block.appendInst(allocator, &self.values, inst, ty);
         }
 
         unreachable;
@@ -272,7 +365,7 @@ pub const Function = struct {
 
     pub fn appendBlockParam(self: *Function, allocator: mem.Allocator, block_ref: BlockRef, ty: Type) mem.Allocator.Error!ValueRef {
         if (self.blocks.getPtr(block_ref)) |block| {
-            return block.appendParam(allocator, ty);
+            return block.appendParam(allocator, &self.values, ty);
         }
 
         unreachable;
@@ -312,18 +405,21 @@ pub const ValuePool = struct {
 pub const Block = struct {
     params: std.ArrayListUnmanaged(ValueRef) = .{},
     insts: std.ArrayListUnmanaged(Instruction) = .{},
-    values: ValuePool = .{},
 
     pub fn deinit(self: *Block, allocator: mem.Allocator) void {
         self.insts.deinit(allocator);
         self.params.deinit(allocator);
-        self.values.deinit(allocator);
     }
 
-    pub fn format(self: *const Block, ref: BlockRef, writer: anytype) !void {
+    pub fn print(
+        self: *const Block,
+        value_pool: *const ValuePool,
+        ref: BlockRef,
+        writer: anytype,
+    ) !void {
         try writer.print("block{}(", .{ref});
         for (self.params.items, 0..) |param_ref, i| {
-            try writer.print("{}", .{self.values.get(param_ref).?.ty});
+            try writer.print("{}", .{value_pool.get(param_ref).?.ty});
 
             if (i < self.params.items.len - 1) {
                 try writer.writeAll(", ");
@@ -332,14 +428,13 @@ pub const Block = struct {
 
         try writer.writeAll("):\n");
 
-        var iter = self.values.iterator();
-        while (iter.next()) |kv| {
-            try writer.print("v{} = {} {}\n", .{ kv.key_ptr.*, kv.value_ptr.ty, kv.value_ptr.data });
-        }
+        // for (self.insts.items) |int| {
+        //     try writer.print("v{} = {} {}\n", .{ key_ptr.*, kv.value_ptr.ty, kv.value_ptr.data });
+        // }
     }
 
-    pub fn appendParam(self: *Block, allocator: mem.Allocator, ty: Type) mem.Allocator.Error!ValueRef {
-        const param_ref = try self.values.put(allocator, Value.init(ValueData{
+    pub fn appendParam(self: *Block, allocator: mem.Allocator, value_pool: *ValuePool, ty: Type) mem.Allocator.Error!ValueRef {
+        const param_ref = try value_pool.put(allocator, Value.init(ValueData{
             .param = .{ .idx = self.params.items.len },
         }, ty));
 
@@ -348,24 +443,26 @@ pub const Block = struct {
         return param_ref;
     }
 
-    pub fn appendInst(self: *Block, allocator: mem.Allocator, inst: Instruction, ty: Type) mem.Allocator.Error!ValueRef {
-        return self.insertInst(allocator, @intCast(self.insts.items.len), inst, ty);
+    pub fn appendInst(self: *Block, allocator: mem.Allocator, value_pool: *ValuePool, inst: Instruction, ty: Type) mem.Allocator.Error!ValueRef {
+        return self.insertInst(allocator, value_pool, @intCast(self.insts.items.len), inst, ty);
     }
 
     pub fn insertInstBeforeTerm(
         self: *Block,
         allocator: mem.Allocator,
+        value_pool: *ValuePool,
         inst: Instruction,
         ty: Type,
     ) mem.Allocator.Error!ValueRef {
         std.debug.assert(self.insts.items.len > 0);
 
-        return self.insertInst(allocator, self.insts.items.len - 1, inst, ty);
+        return self.insertInst(allocator, value_pool, self.insts.items.len - 1, inst, ty);
     }
 
     pub fn insertInst(
         self: *Block,
         allocator: mem.Allocator,
+        value_pool: *ValuePool,
         before: InstRef,
         inst: Instruction,
         ty: Type,
@@ -374,7 +471,7 @@ pub const Block = struct {
 
         try self.insts.insert(allocator, before, inst);
 
-        return self.values.put(
+        return value_pool.put(
             allocator,
             Value.init(ValueData{ .inst = @intCast(before) }, ty),
         );
@@ -434,7 +531,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var alloc = gpa.allocator();
 
-    var func = Function.init("add", Signature{
+    var func = Function.init(alloc, "add", Signature{
         .ret = types.I32,
         .args = .{},
     });
@@ -443,18 +540,20 @@ pub fn main() !void {
 
     try func.appendParam(alloc, types.I32);
 
+    var zero_args = try alloc.alloc(ValueRef, 0);
+
     const b = try func.appendBlock(alloc);
     const b2 = try func.appendBlock(alloc);
     _ = try func.appendInst(
         alloc,
         b,
-        Instruction{ .jump = .{ .block = b2 } },
+        Instruction{ .jump = .{ .block = b2, .args = zero_args } },
         types.I32,
     );
 
     const p1 = try func.appendBlockParam(alloc, b, types.I32);
 
-    const ret = try func.appendInst(
+    _ = try func.appendInst(
         alloc,
         b2,
         Instruction{ .ret = p1 },
@@ -462,12 +561,57 @@ pub fn main() !void {
     );
 
     const cfg = try ControlFlowGraph.fromFunction(alloc, &func);
-    std.log.info("{any}", .{func.blocks.get(0).?.insts.items});
-    std.log.info("{any}", .{func.blocks.get(0).?.values.get(ret).?.data});
-    std.log.info("{any}", .{func});
-    std.log.info("{any}", .{cfg});
+    // std.log.info("{any}", .{func.blocks.get(0).?.insts.items});
+    // std.log.info("{any}", .{func.values.get(ret).?.data});
+    // std.log.info("{any}", .{func});
+    // std.log.info("{any}", .{cfg});
 
     var domtree = a{};
-    try domtree.computePostorder(alloc, &cfg, &func);
+    try domtree.compute(alloc, &cfg, &func);
     std.log.info("{any}", .{domtree.formatter(&func)});
+}
+
+test "ControlFlowGraph" {
+    var allocator = std.testing.allocator;
+
+    var func = Function.init(allocator, "add", Signature{
+        .ret = types.I32,
+        .args = .{},
+    });
+    defer func.deinit(allocator);
+
+    try func.appendParam(allocator, types.I32);
+
+    const block1 = try func.appendBlock(allocator);
+    const block2 = try func.appendBlock(allocator);
+    const param1 = try func.appendBlockParam(allocator, block1, types.I32);
+
+    var block1_args = try allocator.alloc(ValueRef, 0);
+
+    _ = try func.appendInst(
+        allocator,
+        block1,
+        Instruction{ .jump = .{ .block = block2, .args = block1_args } },
+        types.I32,
+    );
+
+    _ = try func.appendInst(
+        allocator,
+        block2,
+        Instruction{ .ret = param1 },
+        types.I32,
+    );
+
+    var cfg = try ControlFlowGraph.fromFunction(allocator, &func);
+    defer cfg.deinit(allocator);
+
+    const node1 = cfg.get(block1).?;
+    try std.testing.expectEqual(@as(usize, 0), node1.preds.inner.entries.len);
+    try std.testing.expectEqual(@as(usize, 1), node1.succs.inner.entries.len);
+    try std.testing.expect(node1.succs.contains(block2));
+
+    const node2 = cfg.get(block2).?;
+    try std.testing.expectEqual(@as(usize, 1), node2.preds.inner.entries.len);
+    try std.testing.expectEqual(@as(usize, 0), node2.succs.inner.entries.len);
+    try std.testing.expect(node2.preds.contains(block1));
 }
