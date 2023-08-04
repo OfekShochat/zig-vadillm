@@ -175,8 +175,8 @@ pub const Constant = []const u8;
 pub const ValueData = union(enum) {
     alias: struct { to: ValueRef },
     param: struct { idx: usize },
-    global_value: GlobalValueRef,
-    constant: ConstantRef,
+    global_value: GlobalValue,
+    constant: Constant,
     inst: InstRef,
 };
 
@@ -309,9 +309,9 @@ pub const Function = struct {
         for (self.blocks.entries.items(.value)) |*b| {
             b.deinit(allocator);
         }
-
         self.blocks.deinit(allocator);
         self.signature.deinit(allocator);
+        self.values.deinit(allocator);
     }
 
     pub fn format(
@@ -561,10 +561,6 @@ pub fn main() !void {
     );
 
     const cfg = try ControlFlowGraph.fromFunction(alloc, &func);
-    // std.log.info("{any}", .{func.blocks.get(0).?.insts.items});
-    // std.log.info("{any}", .{func.values.get(ret).?.data});
-    // std.log.info("{any}", .{func});
-    // std.log.info("{any}", .{cfg});
 
     var domtree = a{};
     try domtree.compute(alloc, &cfg, &func);

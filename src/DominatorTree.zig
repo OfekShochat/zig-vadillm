@@ -278,7 +278,7 @@ test "DominatorTree.simple" {
     const Instruction = @import("main.zig").Instruction;
     var allocator = std.testing.allocator;
 
-    var func = Function.init("add", Signature{
+    var func = Function.init(allocator, "add", Signature{
         .ret = types.I32,
         .args = .{},
     });
@@ -333,7 +333,7 @@ test "DominatorTree.loops" {
     const Instruction = @import("main.zig").Instruction;
     var allocator = std.testing.allocator;
 
-    var func = Function.init("add", Signature{
+    var func = Function.init(allocator, "add", Signature{
         .ret = types.I32,
         .args = .{},
     });
@@ -344,6 +344,7 @@ test "DominatorTree.loops" {
     const block1 = try func.appendBlock(allocator);
     const block2 = try func.appendBlock(allocator);
     const block3 = try func.appendBlock(allocator);
+    const block4 = try func.appendBlock(allocator);
     const param1 = try func.appendBlockParam(allocator, block1, types.I32);
 
     var zero_args = try allocator.alloc(ValueRef, 0);
@@ -356,7 +357,8 @@ test "DominatorTree.loops" {
     const const2 = undefined;
     // const const2 = try func.appendConstant(allocator, std.mem.toBytes(constval2));
 
-    var args = allocator.alloc(ValueRef, 1);
+    var args = try allocator.alloc(ValueRef, 1);
+    defer allocator.destroy(args);
     args[0] = const2;
     _ = try func.appendInst(
         allocator,
@@ -365,27 +367,34 @@ test "DominatorTree.loops" {
         types.I32,
     );
 
-    const cond = try func.appendInst(
+    _ = try func.appendInst(
         allocator,
         block2,
+        Instruction{ .jump = .{ .block = block3, .args = args } },
+        types.I32,
+    );
+
+    const cond = try func.appendInst(
+        allocator,
+        block3,
         Instruction{ .icmp = .{ .cond_code = .UnsignedLessThan, .lhs = param1, .rhs = const1 } },
         types.I32,
     );
 
     _ = try func.appendInst(
         allocator,
-        block2,
+        block3,
         Instruction{ .brif = .{
             .cond = cond,
             .cond_true = .{ .block = block2, .args = zero_args },
-            .cond_false = .{ .block = block3, .args = zero_args },
+            .cond_false = .{ .block = block4, .args = zero_args },
         } },
         types.I32,
     );
 
     _ = try func.appendInst(
         allocator,
-        block3,
+        block4,
         Instruction{ .ret = null },
         types.I32,
     );
@@ -398,6 +407,15 @@ test "DominatorTree.loops" {
 
     try domtree.compute(allocator, &cfg, &func);
 
+    try std.testing.expect(domtree.dominates(block1, block1));
+    try std.testing.expect(domtree.dominates(block2, block2));
+    try std.testing.expect(domtree.dominates(block3, block3));
+
     try std.testing.expect(domtree.dominates(block1, block2));
-    try std.testing.expect(!domtree.dominates(block2, block1));
+    try std.testing.expect(domtree.dominates(block1, block3));
+
+    try std.testing.expect(domtree.dominates(block2, block3));
+
+    try std.testing.expect(!domtree.dominates(block3, block1));
+    try std.testing.expect(!domtree.dominates(block3, block2)); // backedges aren't considered dominating
 }
