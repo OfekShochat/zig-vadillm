@@ -3,6 +3,7 @@ const types = @import("types.zig");
 const Type = @import("types.zig").Type;
 const mem = std.mem;
 const a = @import("DominatorTree.zig");
+const wtf = @import("LoopAnalysis.zig");
 
 pub const ValueRef = u32;
 pub const BlockRef = u32;
@@ -16,7 +17,7 @@ pub const BinOp = struct { lhs: ValueRef, rhs: ValueRef };
 // possible optimization, use [*] and a u8 len becaues we don't have that many registers
 pub const BlockCall = struct {
     block: BlockRef,
-    args: []ValueRef,
+    args: std.ArrayListUnmanaged(ValueRef), //[]ValueRef,
 };
 
 pub const CondCode = enum {
@@ -57,7 +58,7 @@ pub const Instruction = union(enum) {
 
     call: struct {
         func: FuncRef,
-        args: []ValueRef,
+        args: std.ArrayListUnmanaged(ValueRef),
     },
 
     brif: struct {
@@ -349,6 +350,10 @@ pub const Function = struct {
         return self.values.getPtr(value_ref);
     }
 
+    pub fn addConst(self: *Function, allocator: mem.Allocator, c: Constant, ty: Type) !ValueRef {
+        return self.values.put(allocator, Value.init(ValueData{.constant = c}, ty));
+    }
+
     pub fn appendInst(
         self: *Function,
         allocator: mem.Allocator,
@@ -401,6 +406,14 @@ pub const ValuePool = struct {
         return self.values.iterator();
     }
 };
+
+// pub const Rewrite = struct {
+//     name: []const u8,
+// };
+//
+// pub fn parseRewrite(comptime name: []const u8, comptime rw: []const u8) !Rewrite {
+//     return struct {};
+// }
 
 pub const Block = struct {
     params: std.ArrayListUnmanaged(ValueRef) = .{},
@@ -540,14 +553,12 @@ pub fn main() !void {
 
     try func.appendParam(alloc, types.I32);
 
-    var zero_args = try alloc.alloc(ValueRef, 0);
-
     const b = try func.appendBlock(alloc);
     const b2 = try func.appendBlock(alloc);
     _ = try func.appendInst(
         alloc,
         b,
-        Instruction{ .jump = .{ .block = b2, .args = zero_args } },
+        Instruction{ .jump = .{ .block = b2, .args = .{} } },
         types.I32,
     );
 
@@ -582,12 +593,12 @@ test "ControlFlowGraph" {
     const block2 = try func.appendBlock(allocator);
     const param1 = try func.appendBlockParam(allocator, block1, types.I32);
 
-    var block1_args = try allocator.alloc(ValueRef, 0);
+    // var block1_args = try allocator.alloc(ValueRef, 0);
 
     _ = try func.appendInst(
         allocator,
         block1,
-        Instruction{ .jump = .{ .block = block2, .args = block1_args } },
+        Instruction{ .jump = .{ .block = block2, .args = .{} } },
         types.I32,
     );
 

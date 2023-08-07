@@ -85,7 +85,7 @@ fn computePostorder(self: *DominatorTree, allocator: mem.Allocator, cfg: *const 
     }
 }
 
-fn dominates(self: DominatorTree, a: BlockRef, b: BlockRef) bool {
+pub fn dominates(self: DominatorTree, a: BlockRef, b: BlockRef) bool {
     // blocks that aren't in the domtree cannot be checked for dominance
     if (!self.nodes.contains(a) or !self.nodes.contains(b)) {
         return false;
@@ -94,14 +94,10 @@ fn dominates(self: DominatorTree, a: BlockRef, b: BlockRef) bool {
     const order_a = self.nodes.getPtr(a).?.rpo_order;
     var finger = b;
 
-    // as long as the postorder order is greater to a's, we're below it
+    // as long as the rpo order is greater to a's, we're below it
     while (self.nodes.get(finger).?.rpo_order > order_a) {
-        const idom = self.nodes.getPtr(finger).?.idom;
-        if (idom == null) {
-            return false;
-        }
-
-        finger = idom.?;
+        const idom = self.nodes.getPtr(finger).?.idom orelse return false;
+        finger = idom;
     }
 
     return finger == a;
@@ -290,12 +286,10 @@ test "DominatorTree.simple" {
     const block2 = try func.appendBlock(allocator);
     const param1 = try func.appendBlockParam(allocator, block1, types.I32);
 
-    var block1_args = try allocator.alloc(ValueRef, 0);
-
     _ = try func.appendInst(
         allocator,
         block1,
-        Instruction{ .jump = .{ .block = block2, .args = block1_args } },
+        Instruction{ .jump = .{ .block = block2, .args = .{} } },
         types.I32,
     );
 
@@ -347,19 +341,11 @@ test "DominatorTree.loops" {
     const block4 = try func.appendBlock(allocator);
     const param1 = try func.appendBlockParam(allocator, block1, types.I32);
 
-    var zero_args = try allocator.alloc(ValueRef, 0);
+    const const1 = try func.addConst(allocator, &std.mem.toBytes(10), types.I32);
 
-    // const constval = 10;
-    // const const1 = try func.appendConstant(allocator, std.mem.toBytes(constval));
-    const const1 = undefined;
-
-    // const constval2 = 0;
-    const const2 = undefined;
-    // const const2 = try func.appendConstant(allocator, std.mem.toBytes(constval2));
-
-    var args = try allocator.alloc(ValueRef, 1);
-    defer allocator.destroy(args);
-    args[0] = const2;
+    var args = std.ArrayListUnmanaged(ValueRef){};
+    try args.append(allocator, const1);
+    defer args.deinit(allocator);
     _ = try func.appendInst(
         allocator,
         block1,
@@ -386,8 +372,8 @@ test "DominatorTree.loops" {
         block3,
         Instruction{ .brif = .{
             .cond = cond,
-            .cond_true = .{ .block = block2, .args = zero_args },
-            .cond_false = .{ .block = block4, .args = zero_args },
+            .cond_true = .{ .block = block2, .args = .{} },
+            .cond_false = .{ .block = block4, .args = .{} },
         } },
         types.I32,
     );
@@ -406,6 +392,8 @@ test "DominatorTree.loops" {
     defer domtree.deinit(allocator);
 
     try domtree.compute(allocator, &cfg, &func);
+
+    std.debug.print("{}", .{domtree.formatter(&func)});
 
     try std.testing.expect(domtree.dominates(block1, block1));
     try std.testing.expect(domtree.dominates(block2, block2));
