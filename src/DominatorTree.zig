@@ -393,7 +393,7 @@ test "DominatorTree.loops" {
 
     try domtree.compute(allocator, &cfg, &func);
 
-    std.debug.print("{}", .{domtree.formatter(&func)});
+    std.debug.print("{}\n", .{domtree.formatter(&func)});
 
     try std.testing.expect(domtree.dominates(block1, block1));
     try std.testing.expect(domtree.dominates(block2, block2));

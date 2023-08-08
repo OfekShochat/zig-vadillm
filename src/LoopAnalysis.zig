@@ -6,6 +6,7 @@ const ControlFlowGraph = @import("main.zig").ControlFlowGraph;
 const LoopAnalysis = @This();
 
 pub const LoopRef = u32;
+pub const INVALID_LOOP_LEVEL = 0xFF;
 
 pub const Loop = struct {
     header: BlockRef,
@@ -30,6 +31,7 @@ pub fn compute(
 ) !void {
     try self.findLoopHeaders(allocator, domtree, cfg);
     try self.discoverLoopBlocks(allocator, domtree, cfg);
+    try self.assignLoopLevels(allocator);
 }
 
 fn findLoopHeaders(
@@ -46,9 +48,11 @@ fn findLoopHeaders(
                 try self.loops.put(allocator, self.loop_ref, Loop{
                     .header = block_ref,
                     .parent = null,
-                    .level = @intCast(0xFF),
+                    .level = @intCast(INVALID_LOOP_LEVEL),
                 });
+                try self.block_map.put(allocator, block_ref, self.loop_ref);
                 self.loop_ref += 1;
+                break;
             }
         }
     }
@@ -58,7 +62,13 @@ fn findOutermostEnclosingLoop(self: *LoopAnalysis, loop_ref: LoopRef) LoopRef {
     var current_loop = loop_ref;
 
     // warning: infinite loop is possible if there are loops inside the parents (shouldn't happen)
+    // this is to prevent that in debug mode.
+    var i: u32 = 0;
+
     while (true) {
+        std.debug.assert(i < INVALID_LOOP_LEVEL);
+        i += 1;
+
         const loop = self.loops.getPtr(current_loop).?;
 
         if (loop.parent) |parent| {
@@ -79,12 +89,12 @@ fn discoverLoopBlocks(
     defer stack.deinit();
 
     var iter = self.loops.iterator();
-    while (iter.next()) |kv| {
-        const curr_loop = kv.key_ptr.*;
+    while (iter.next()) |loop_entry| {
+        const curr_loop = loop_entry.key_ptr.*;
 
         // step 1: find backedges and add to stack
-        for (cfg.get(kv.value_ptr.header).?.preds.iter()) |pred| {
-            if (domtree.dominates(kv.value_ptr.header, pred)) {
+        for (cfg.get(loop_entry.value_ptr.header).?.preds.iter()) |pred| {
+            if (domtree.dominates(loop_entry.value_ptr.header, pred)) {
                 try stack.append(pred);
             }
         }
@@ -93,10 +103,10 @@ fn discoverLoopBlocks(
         while (stack.items.len > 0) {
             const block_ref = stack.pop();
 
-            if (self.block_map.get(block_ref)) |loop_from_block| {
+            if (self.block_map.get(block_ref)) |loop| {
                 // step 2.2: if you found a node again, there's another loop somewhere.
                 // check if the loop is already registered in the current loop.
-                const outermost_loop = self.findOutermostEnclosingLoop(loop_from_block);
+                const outermost_loop = self.findOutermostEnclosingLoop(loop);
 
                 // step 2.3: register the loop into the current one and continue from its header. if
                 // the outermost loop is the same as the current one, the loop is known and you can
@@ -112,6 +122,37 @@ fn discoverLoopBlocks(
             } else {
                 // step 2.1: if you find a node you didn't encounter, add it to the current loop.
                 try self.block_map.put(allocator, block_ref, curr_loop);
+            }
+        }
+    }
+}
+
+fn assignLoopLevels(self: *LoopAnalysis, allocator: std.mem.Allocator) !void {
+    var stack = std.ArrayList(LoopRef).init(allocator);
+    defer stack.deinit();
+
+    for (self.loops.entries.items(.key)) |loop| {
+        if (self.loops.get(loop).?.level == INVALID_LOOP_LEVEL) {
+            try stack.append(loop);
+
+            while (stack.getLastOrNull()) |lp| {
+                if (self.loops.getPtr(lp).?.parent) |parent_ref| {
+                    var parent = self.loops.getPtr(parent_ref) orelse @panic("bad parent ref from `discoverLoopBlocks");
+
+                    if (parent.level != INVALID_LOOP_LEVEL) {
+                        // the current loop level is the parent's + 1
+                        self.loops.getPtr(lp).?.level = parent.level + 1;
+                        _ = stack.pop();
+                    } else {
+                        // if the parent hasn't been processed yet, retain the current loop for later
+                        // and process the parent first.
+                        try stack.append(parent_ref);
+                    }
+                } else {
+                    // no parent, just a lone loop. we should get here eventually for the outermost loops.
+                    self.loops.getPtr(lp).?.level = 1;
+                    _ = stack.pop();
+                }
             }
         }
     }
@@ -196,6 +237,7 @@ test "wta" {
 
     var loop_analysis = LoopAnalysis{};
     defer loop_analysis.deinit(allocator);
+
     try loop_analysis.compute(allocator, &domtree, &cfg);
     std.debug.print("{any}\n", .{loop_analysis.loops.get(0)});
 }

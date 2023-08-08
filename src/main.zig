@@ -176,9 +176,9 @@ pub const Constant = []const u8;
 pub const ValueData = union(enum) {
     alias: struct { to: ValueRef },
     param: struct { idx: usize },
-    global_value: GlobalValue,
+    global_value: GlobalValue, // TODO: move the actual data away from here
     constant: Constant,
-    inst: InstRef,
+    inst: struct { block: BlockRef, pos: InstRef },
 };
 
 pub const Signature = struct {
@@ -337,7 +337,7 @@ pub const Function = struct {
 
     pub fn appendBlock(self: *Function, allocator: mem.Allocator) mem.Allocator.Error!BlockRef {
         defer self.block_counter += 1;
-        try self.blocks.put(allocator, self.block_counter, Block{});
+        try self.blocks.put(allocator, self.block_counter, Block{.ref = self.block_counter});
 
         return self.block_counter;
     }
@@ -416,6 +416,7 @@ pub const ValuePool = struct {
 // }
 
 pub const Block = struct {
+    ref: BlockRef,
     params: std.ArrayListUnmanaged(ValueRef) = .{},
     insts: std.ArrayListUnmanaged(Instruction) = .{},
 
@@ -486,7 +487,7 @@ pub const Block = struct {
 
         return value_pool.put(
             allocator,
-            Value.init(ValueData{ .inst = @intCast(before) }, ty),
+            Value.init(ValueData{ .inst = .{ .block = self.ref, .pos = @intCast(before) } }, ty),
         );
     }
 
