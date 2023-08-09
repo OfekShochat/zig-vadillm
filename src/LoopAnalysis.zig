@@ -92,7 +92,7 @@ fn discoverLoopBlocks(
     while (iter.next()) |loop_entry| {
         const curr_loop = loop_entry.key_ptr.*;
 
-        // step 1: find backedges and add to stack
+        // step 1: find backedges and add to stack.
         for (cfg.get(loop_entry.value_ptr.header).?.preds.iter()) |pred| {
             if (domtree.dominates(loop_entry.value_ptr.header, pred)) {
                 try stack.append(pred);
@@ -104,8 +104,9 @@ fn discoverLoopBlocks(
             const block_ref = stack.pop();
 
             if (self.block_map.get(block_ref)) |loop| {
-                // step 2.2: if you found a node again, there's another loop somewhere.
-                // check if the loop is already registered in the current loop.
+                // step 2.2: if you found a node again (or this is a backedge that we added earlier),
+                // there's another loop somewhere. check if that loop is already registered in the
+                // current loop.
                 const outermost_loop = self.findOutermostEnclosingLoop(loop);
 
                 // step 2.3: register the loop into the current one and continue from its header. if

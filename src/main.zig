@@ -337,7 +337,7 @@ pub const Function = struct {
 
     pub fn appendBlock(self: *Function, allocator: mem.Allocator) mem.Allocator.Error!BlockRef {
         defer self.block_counter += 1;
-        try self.blocks.put(allocator, self.block_counter, Block{.ref = self.block_counter});
+        try self.blocks.put(allocator, self.block_counter, Block{ .ref = self.block_counter });
 
         return self.block_counter;
     }
@@ -351,7 +351,7 @@ pub const Function = struct {
     }
 
     pub fn addConst(self: *Function, allocator: mem.Allocator, c: Constant, ty: Type) !ValueRef {
-        return self.values.put(allocator, Value.init(ValueData{.constant = c}, ty));
+        return self.values.put(allocator, Value.init(ValueData{ .constant = c }, ty));
     }
 
     pub fn appendInst(
@@ -365,6 +365,7 @@ pub const Function = struct {
             return block.appendInst(allocator, &self.values, inst, ty);
         }
 
+        // should this actually be unreachable?
         unreachable;
     }
 
