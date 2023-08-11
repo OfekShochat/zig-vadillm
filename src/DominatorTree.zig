@@ -1,22 +1,20 @@
 const std = @import("std");
-const mem = std.mem;
 
-const ControlFlowGraph = @import("main.zig").ControlFlowGraph;
-const Signature = @import("main.zig").Signature;
-const Module = @import("main.zig").Module;
-const Function = @import("main.zig").Function;
-const BlockRef = @import("main.zig").BlockRef;
-const ValueRef = @import("main.zig").ValueRef;
-const HashSet = @import("main.zig").HashSet;
+const ControlFlowGraph = @import("ControlFlowGraph.zig");
+const Signature = @import("function.zig").Signature;
+const Module = @import("Module.zig");
+const Index = @import("common.zig").Index;
+const Function = @import("function.zig").Function;
+const HashSet = @import("hashset.zig").HashSet;
 
 const DominatorTree = @This();
 
-postorder: std.ArrayListUnmanaged(BlockRef) = .{},
-nodes: std.AutoHashMapUnmanaged(BlockRef, DomNode) = .{},
+postorder: std.ArrayListUnmanaged(Index) = .{},
+nodes: std.AutoHashMapUnmanaged(Index, DomNode) = .{},
 
 pub const DomNode = struct {
     // optional immediate dominator
-    idom: ?BlockRef,
+    idom: ?Index,
 
     // cache reverse postorder number for dominance computation
     rpo_order: u32,
@@ -28,16 +26,16 @@ const Visited = enum {
 };
 
 const StackEntry = struct {
-    block_ref: BlockRef,
+    block_ref: Index,
     visited: Visited,
 };
 
-pub fn deinit(self: *DominatorTree, allocator: mem.Allocator) void {
+pub fn deinit(self: *DominatorTree, allocator: std.mem.Allocator) void {
     self.postorder.deinit(allocator);
     self.nodes.deinit(allocator);
 }
 
-pub fn compute(self: *DominatorTree, allocator: mem.Allocator, cfg: *const ControlFlowGraph, func: *const Function) !void {
+pub fn compute(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *const ControlFlowGraph, func: *const Function) !void {
     if (cfg.nodes.size == 0) {
         // nothing to do, there's only one (or less) live block(s)
         return;
@@ -49,9 +47,9 @@ pub fn compute(self: *DominatorTree, allocator: mem.Allocator, cfg: *const Contr
     try self.computeDomtree(allocator, cfg, func);
 }
 
-fn computePostorder(self: *DominatorTree, allocator: mem.Allocator, cfg: *const ControlFlowGraph, func: *const Function) !void {
+fn computePostorder(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *const ControlFlowGraph, func: *const Function) !void {
     // we shouldn't visit blocks more than twice (loops)
-    var visited_blocks = std.AutoHashMap(ValueRef, void).init(allocator);
+    var visited_blocks = std.AutoHashMap(Index, void).init(allocator);
     defer visited_blocks.deinit();
 
     var stack = std.ArrayList(StackEntry).init(allocator);
@@ -85,7 +83,7 @@ fn computePostorder(self: *DominatorTree, allocator: mem.Allocator, cfg: *const 
     }
 }
 
-pub fn dominates(self: DominatorTree, a: BlockRef, b: BlockRef) bool {
+pub fn dominates(self: DominatorTree, a: Index, b: Index) bool {
     // blocks that aren't in the domtree cannot be checked for dominance
     if (!self.nodes.contains(a) or !self.nodes.contains(b)) {
         return false;
@@ -103,7 +101,7 @@ pub fn dominates(self: DominatorTree, a: BlockRef, b: BlockRef) bool {
     return finger == a;
 }
 
-fn findInitialIdom(self: *DominatorTree, preds: *const HashSet(BlockRef), entry_ref: BlockRef) ?BlockRef {
+fn findInitialIdom(self: *DominatorTree, preds: *const HashSet(Index), entry_ref: Index) ?Index {
     for (preds.iter()) |pred_ref| {
         var pred = self.nodes.getPtr(pred_ref) orelse @panic("rpo ensures that all parents are visited before the child");
         if (pred.idom != null or pred_ref == entry_ref) {
@@ -114,7 +112,7 @@ fn findInitialIdom(self: *DominatorTree, preds: *const HashSet(BlockRef), entry_
     return null;
 }
 
-fn updateDominators(self: *DominatorTree, current_block: BlockRef, cfg: *const ControlFlowGraph) struct { val: BlockRef, changed: bool } {
+fn updateDominators(self: *DominatorTree, current_block: Index, cfg: *const ControlFlowGraph) struct { val: Index, changed: bool } {
     var new_idom = self.nodes.get(current_block).?.idom orelse @panic("rpo ensures that at least one parent is visited before a child");
 
     var preds = &cfg.get(current_block).?.preds;
@@ -134,7 +132,7 @@ fn updateDominators(self: *DominatorTree, current_block: BlockRef, cfg: *const C
     };
 }
 
-fn computeDomtree(self: *DominatorTree, allocator: mem.Allocator, cfg: *const ControlFlowGraph, func: *const Function) !void {
+fn computeDomtree(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *const ControlFlowGraph, func: *const Function) !void {
     const entry_ref = func.entryBlock();
 
     try self.computeInitialState(allocator, cfg, entry_ref);
@@ -161,7 +159,7 @@ fn computeDomtree(self: *DominatorTree, allocator: mem.Allocator, cfg: *const Co
     }
 }
 
-fn computeInitialState(self: *DominatorTree, allocator: mem.Allocator, cfg: *const ControlFlowGraph, entry_ref: ValueRef) !void {
+fn computeInitialState(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *const ControlFlowGraph, entry_ref: Index) !void {
     try self.nodes.put(allocator, entry_ref, .{ .idom = null, .rpo_order = 0 });
 
     var rpo_order: u32 = 1;
@@ -182,7 +180,7 @@ fn computeInitialState(self: *DominatorTree, allocator: mem.Allocator, cfg: *con
 }
 
 /// finds intersection point of dominators
-fn commonDominatingAncestor(self: DominatorTree, block1: BlockRef, block2: BlockRef) BlockRef {
+fn commonDominatingAncestor(self: DominatorTree, block1: Index, block2: Index) Index {
     std.debug.assert(self.nodes.contains(block1) and self.nodes.contains(block2));
 
     var finger1 = block1;
@@ -224,7 +222,7 @@ pub const RPOIterator = struct {
     idx: usize,
     domtree: *const DominatorTree,
 
-    pub fn next(self: *RPOIterator) ?BlockRef {
+    pub fn next(self: *RPOIterator) ?Index {
         if (self.idx > 0) {
             self.idx -= 1;
             return self.domtree.postorder.items[self.idx];
@@ -269,12 +267,13 @@ pub const DominatorTreeFormatter = struct {
     }
 };
 
+const types = @import("types.zig");
+const Instruction = @import("instructions.zig").Instruction;
+
 test "DominatorTree.simple" {
-    const types = @import("types.zig");
-    const Instruction = @import("main.zig").Instruction;
     var allocator = std.testing.allocator;
 
-    var func = Function.init(allocator, "add", Signature{
+    var func = Function.init(allocator, Signature{
         .ret = types.I32,
         .args = .{},
     });
@@ -323,11 +322,9 @@ test "DominatorTree.simple" {
 }
 
 test "DominatorTree.loops" {
-    const types = @import("types.zig");
-    const Instruction = @import("main.zig").Instruction;
     var allocator = std.testing.allocator;
 
-    var func = Function.init(allocator, "add", Signature{
+    var func = Function.init(allocator, Signature{
         .ret = types.I32,
         .args = .{},
     });
@@ -343,7 +340,7 @@ test "DominatorTree.loops" {
 
     const const1 = try func.addConst(allocator, &std.mem.toBytes(10), types.I32);
 
-    var args = std.ArrayListUnmanaged(ValueRef){};
+    var args = std.ArrayListUnmanaged(Index){};
     try args.append(allocator, const1);
     defer args.deinit(allocator);
     _ = try func.appendInst(

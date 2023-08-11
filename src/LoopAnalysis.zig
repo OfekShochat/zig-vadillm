@@ -1,7 +1,7 @@
 const std = @import("std");
-const BlockRef = @import("main.zig").BlockRef;
+const Index = @import("common.zig").Index;
 const DominatorTree = @import("DominatorTree.zig");
-const ControlFlowGraph = @import("main.zig").ControlFlowGraph;
+const ControlFlowGraph = @import("ControlFlowGraph.zig");
 
 const LoopAnalysis = @This();
 
@@ -9,13 +9,13 @@ pub const LoopRef = u32;
 pub const INVALID_LOOP_LEVEL = 0xFF;
 
 pub const Loop = struct {
-    header: BlockRef,
+    header: Index,
     parent: ?LoopRef,
     level: u8,
 };
 
 loops: std.AutoArrayHashMapUnmanaged(LoopRef, Loop) = .{},
-block_map: std.AutoArrayHashMapUnmanaged(BlockRef, LoopRef) = .{},
+block_map: std.AutoArrayHashMapUnmanaged(Index, LoopRef) = .{},
 loop_ref: LoopRef = 0,
 
 pub fn deinit(self: *LoopAnalysis, allocator: std.mem.Allocator) void {
@@ -32,6 +32,16 @@ pub fn compute(
     try self.findLoopHeaders(allocator, domtree, cfg);
     try self.discoverLoopBlocks(allocator, domtree, cfg);
     try self.assignLoopLevels(allocator);
+}
+
+pub fn clear(self: *LoopAnalysis) !void {
+    self.block_map.clearRetainingCapacity();
+    self.loops.clearRetainingCapacity();
+}
+
+pub fn clearAndFree(self: *LoopAnalysis, allocator: std.mem.Allocator) !void {
+    self.block_map.clearAndFree(allocator);
+    self.loops.clearAndFree(allocator);
 }
 
 fn findLoopHeaders(
@@ -85,7 +95,7 @@ fn discoverLoopBlocks(
     domtree: *const DominatorTree,
     cfg: *const ControlFlowGraph,
 ) !void {
-    var stack = std.ArrayList(BlockRef).init(allocator);
+    var stack = std.ArrayList(Index).init(allocator);
     defer stack.deinit();
 
     var iter = self.loops.iterator();
@@ -136,6 +146,8 @@ fn assignLoopLevels(self: *LoopAnalysis, allocator: std.mem.Allocator) !void {
         if (self.loops.get(loop).?.level == INVALID_LOOP_LEVEL) {
             try stack.append(loop);
 
+            // DFS on the parents until there's no parent or the parent has already been processed
+            // starting at each backedge.
             while (stack.getLastOrNull()) |lp| {
                 if (self.loops.getPtr(lp).?.parent) |parent_ref| {
                     var parent = self.loops.getPtr(parent_ref) orelse @panic("bad parent ref from `discoverLoopBlocks");
@@ -159,18 +171,17 @@ fn assignLoopLevels(self: *LoopAnalysis, allocator: std.mem.Allocator) !void {
     }
 }
 
-const Signature = @import("main.zig").Signature;
-const Module = @import("main.zig").Module;
-const Function = @import("main.zig").Function;
-const ValueRef = @import("main.zig").ValueRef;
-const HashSet = @import("main.zig").HashSet;
+const Module = @import("Module.zig");
+const Function = @import("function.zig").Function;
+const Signature = @import("function.zig").Signature;
+const HashSet = @import("hashset.zig").HashSet;
 
 test "wta" {
     const types = @import("types.zig");
-    const Instruction = @import("main.zig").Instruction;
+    const Instruction = @import("instructions.zig").Instruction;
     var allocator = std.testing.allocator;
 
-    var func = Function.init(allocator, "add", Signature{
+    var func = Function.init(allocator, Signature{
         .ret = types.I32,
         .args = .{},
     });
@@ -186,7 +197,7 @@ test "wta" {
 
     const const1 = try func.addConst(allocator, &std.mem.toBytes(10), types.I32);
 
-    var args = std.ArrayListUnmanaged(ValueRef){};
+    var args = std.ArrayListUnmanaged(Index){};
     try args.append(allocator, const1);
     defer args.deinit(allocator);
     _ = try func.appendInst(

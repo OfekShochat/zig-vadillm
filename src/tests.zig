@@ -3,4 +3,5 @@ comptime {
     _ = @import("main.zig");
     _ = @import("DominatorTree.zig");
     _ = @import("LoopAnalysis.zig");
+    _ = @import("parser.zig");
 }
