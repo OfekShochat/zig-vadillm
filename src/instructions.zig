@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Index = @import("common.zig").Index;
+const Index = @import("ir.zig").Index;
 
 pub const BinOp = struct { lhs: Index, rhs: Index };
 

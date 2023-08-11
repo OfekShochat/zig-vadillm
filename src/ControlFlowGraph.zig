@@ -1,8 +1,9 @@
 const std = @import("std");
+const ir = @import("ir.zig");
 
-const Index = @import("common.zig").Index;
-const Function = @import("function.zig").Function;
-const Signature = @import("function.zig").Signature;
+const Index = ir.Index;
+const Function = ir.Function;
+const Signature = ir.Signature;
 const HashSet = @import("hashset.zig").HashSet;
 
 const ControlFlowGraph = @This();

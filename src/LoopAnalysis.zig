@@ -1,5 +1,5 @@
 const std = @import("std");
-const Index = @import("common.zig").Index;
+const Index = @import("ir.zig").Index;
 const DominatorTree = @import("DominatorTree.zig");
 const ControlFlowGraph = @import("ControlFlowGraph.zig");
 

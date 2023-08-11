@@ -1,10 +1,11 @@
 const std = @import("std");
+const ir = @import("ir.zig");
 
 const Signature = @import("function.zig").Signature;
 const Function = @import("function.zig").Function;
-const ValuePool = @import("common.zig").ValuePool;
-const Index = @import("common.zig").Index;
-const Constant = @import("common.zig").Constant;
+const ValuePool = ir.ValuePool;
+const Index = ir.Index;
+const Constant = ir.Constant;
 
 const Module = @This();
 

@@ -1,5 +1,5 @@
 const std = @import("std");
-const Index = @import("common.zig").Index;
+const Index = @import("ir.zig").Index;
 const types = @import("types.zig");
 
 const Parser = @This();

@@ -1,10 +1,12 @@
 const std = @import("std");
+const ir = @import("ir.zig");
+
+const Signature = ir.Signature;
+const Module = ir.Module;
+const Index = ir.Index;
+const Function = ir.Function;
 
 const ControlFlowGraph = @import("ControlFlowGraph.zig");
-const Signature = @import("function.zig").Signature;
-const Module = @import("Module.zig");
-const Index = @import("common.zig").Index;
-const Function = @import("function.zig").Function;
 const HashSet = @import("hashset.zig").HashSet;
 
 const DominatorTree = @This();

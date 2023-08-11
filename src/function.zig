@@ -1,9 +1,10 @@
 const std = @import("std");
+const ir = @import("ir.zig");
 
 const Type = @import("types.zig").Type;
-const Index = @import("common.zig").Index;
-const Constant = @import("common.zig").Constant;
-const ValuePool = @import("common.zig").ValuePool;
+const Index = ir.Index;
+const Constant = ir.Constant;
+const ValuePool = ir.ValuePool;
 const IndexedMap = @import("indexed_map.zig").IndexedMap;
 const Instruction = @import("instructions.zig").Instruction;
 

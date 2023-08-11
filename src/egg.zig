@@ -2,6 +2,8 @@ const std = @import("std");
 
 const IndexedMap = @import("indexed_map.zig").IndexedMap;
 
+pub const Id = u32;
+
 /// An Egraph representation.
 ///
 /// T: the enode type
@@ -36,7 +38,7 @@ const IndexedMap = @import("indexed_map.zig").IndexedMap;
 /// ```
 pub fn EGraph(comptime T: type, comptime C: type) type {
     return struct {
-        nodes: IndexedMap(EClass),
+        nodes: IndexedMap(Id, EClass),
         allocator: std.mem.Allocator,
 
         comptime {
@@ -52,7 +54,7 @@ pub fn EGraph(comptime T: type, comptime C: type) type {
 
         pub fn init(allocator: std.mem.Allocator) @This() {
             return @This(){
-                .nodes = IndexedMap(EClass){},
+                .nodes = IndexedMap(Id, EClass){},
                 .allocator = allocator,
             };
         }

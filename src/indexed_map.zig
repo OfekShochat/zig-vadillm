@@ -1,23 +1,21 @@
 const std = @import("std");
 
-const Index = @import("common.zig").Index;
-
-pub fn IndexedMap(comptime T: type) type {
+pub fn IndexedMap(comptime K: type, comptime T: type) type {
     return struct {
         values: Map = .{},
-        counter: Index = 0,
+        counter: K = 0,
 
-        const Map = std.AutoArrayHashMapUnmanaged(Index, T);
+        const Map = std.AutoArrayHashMapUnmanaged(K, T);
 
         pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
             self.values.deinit(allocator);
         }
 
-        pub fn get(self: @This(), key: Index) ?*T {
+        pub fn get(self: @This(), key: K) ?*T {
             return self.values.getPtr(key);
         }
 
-        pub fn put(self: *@This(), allocator: std.mem.Allocator, value: T) std.mem.Allocator.Error!Index {
+        pub fn put(self: *@This(), allocator: std.mem.Allocator, value: T) std.mem.Allocator.Error!K {
             defer self.counter += 1;
             try self.values.put(allocator, self.counter, value);
 
