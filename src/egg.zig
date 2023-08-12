@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const IndexedMap = @import("indexed_map.zig").IndexedMap;
+pub const UnionFind = @import("egg/UnionFind.zig");
 
 pub const Id = u32;
 

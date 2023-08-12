@@ -5,4 +5,5 @@ comptime {
     _ = @import("LoopAnalysis.zig");
     _ = @import("parser.zig");
     _ = @import("egg.zig");
+    _ = @import("egg/UnionFind.zig");
 }
