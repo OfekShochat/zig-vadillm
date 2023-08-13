@@ -21,8 +21,8 @@ pub const Token = union(enum) {
     equal: void, // '='
     shebang: void, // '!'
     arrow: void, // '->'
-    float: []const u8, // Floating point immediate
-    integer: []const u8, // Integer immediate
+    float: []const u8, // floating point immediate
+    integer: []const u8, // integer immediate
     ty: types.Type, // i32, f32, b32x4, ...
     value: Index, // v12, v7
     block: Index, // block3
