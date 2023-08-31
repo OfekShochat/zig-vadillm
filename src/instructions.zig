@@ -5,6 +5,7 @@ const Index = @import("ir.zig").Index;
 pub const BinOp = struct { lhs: Index, rhs: Index };
 
 pub const BlockCall = struct {
+    // TODO: put block into args to conserve space
     block: Index,
     args: std.ArrayListUnmanaged(Index),
 };
@@ -48,7 +49,7 @@ pub const Instruction = union(enum) {
 
     call: struct {
         func: Index,
-        args: std.ArrayListUnmanaged(Index),
+        args: *std.ArrayListUnmanaged(Index),
     },
 
     brif: struct {

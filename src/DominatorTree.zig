@@ -1,12 +1,10 @@
 const std = @import("std");
-const ir = @import("ir.zig");
-
-const Signature = ir.Signature;
-const Module = ir.Module;
-const Index = ir.Index;
-const Function = ir.Function;
 
 const ControlFlowGraph = @import("ControlFlowGraph.zig");
+const Signature = @import("function.zig").Signature;
+const Module = @import("Module.zig");
+const Index = @import("ir.zig").Index;
+const Function = @import("function.zig").Function;
 const HashSet = @import("hashset.zig").HashSet;
 
 const DominatorTree = @This();
@@ -37,19 +35,22 @@ pub fn deinit(self: *DominatorTree, allocator: std.mem.Allocator) void {
     self.nodes.deinit(allocator);
 }
 
-pub fn compute(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *const ControlFlowGraph, func: *const Function) !void {
+pub fn preallocate(self: *DominatorTree, allocator: std.mem.Allocator, blocks: usize) !void {
+    try self.nodes.ensureTotalCapacity(allocator, @intCast(blocks));
+}
+
+// FIXME: replace `func` with the entry_point ref, making DominatorTree Machine/IR independent.
+pub fn compute(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *const ControlFlowGraph) !void {
     if (cfg.nodes.size == 0) {
         // nothing to do, there's only one (or less) live block(s)
         return;
     }
 
-    try self.nodes.ensureTotalCapacity(allocator, @intCast(func.blocks.entries.len));
-
-    try self.computePostorder(allocator, cfg, func);
-    try self.computeDomtree(allocator, cfg, func);
+    try self.computePostorder(allocator, cfg);
+    try self.computeDomtree(allocator, cfg);
 }
 
-fn computePostorder(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *const ControlFlowGraph, func: *const Function) !void {
+fn computePostorder(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *const ControlFlowGraph) !void {
     // we shouldn't visit blocks more than twice (loops)
     var visited_blocks = std.AutoHashMap(Index, void).init(allocator);
     defer visited_blocks.deinit();
@@ -57,7 +58,7 @@ fn computePostorder(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *co
     var stack = std.ArrayList(StackEntry).init(allocator);
     defer stack.deinit();
 
-    try stack.append(.{ .block_ref = func.entryBlock(), .visited = .None });
+    try stack.append(.{ .block_ref = cfg.entry_ref, .visited = .None });
 
     // we visit twice: the first, to add the children; and the second, to add the node itself
     while (stack.items.len != 0) {
@@ -134,10 +135,8 @@ fn updateDominators(self: *DominatorTree, current_block: Index, cfg: *const Cont
     };
 }
 
-fn computeDomtree(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *const ControlFlowGraph, func: *const Function) !void {
-    const entry_ref = func.entryBlock();
-
-    try self.computeInitialState(allocator, cfg, entry_ref);
+fn computeDomtree(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *const ControlFlowGraph) !void {
+    try self.computeInitialState(allocator, cfg, cfg.entry_ref);
 
     // unless the cfg has an an irreducible control flow, such as a loop with two entry points,
     // this should exit after one iteration
@@ -147,7 +146,7 @@ fn computeDomtree(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *cons
 
         var iter = self.reversePostorderIter();
         while (iter.next()) |block_ref| {
-            if (block_ref == entry_ref) {
+            if (block_ref == cfg.entry_ref) {
                 continue;
             }
 
@@ -317,7 +316,7 @@ test "DominatorTree.simple" {
     var domtree = DominatorTree{};
     defer domtree.deinit(allocator);
 
-    try domtree.compute(allocator, &cfg, &func);
+    try domtree.compute(allocator, &cfg);
 
     try std.testing.expect(domtree.dominates(block1, block2));
     try std.testing.expect(!domtree.dominates(block2, block1));
@@ -390,7 +389,7 @@ test "DominatorTree.loops" {
     var domtree = DominatorTree{};
     defer domtree.deinit(allocator);
 
-    try domtree.compute(allocator, &cfg, &func);
+    try domtree.compute(allocator, &cfg);
 
     std.debug.print("{}\n", .{domtree.formatter(&func)});
 

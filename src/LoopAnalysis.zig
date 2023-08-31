@@ -176,7 +176,7 @@ const Function = @import("function.zig").Function;
 const Signature = @import("function.zig").Signature;
 const HashSet = @import("hashset.zig").HashSet;
 
-test "wta" {
+test "loop analysis" {
     const types = @import("types.zig");
     const Instruction = @import("instructions.zig").Instruction;
     var allocator = std.testing.allocator;
@@ -245,7 +245,7 @@ test "wta" {
     var domtree = DominatorTree{};
     defer domtree.deinit(allocator);
 
-    try domtree.compute(allocator, &cfg, &func);
+    try domtree.compute(allocator, &cfg);
 
     var loop_analysis = LoopAnalysis{};
     defer loop_analysis.deinit(allocator);

@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const Type = @import("types.zig").Type;
 const mem = std.mem;
+const ir = @import("ir.zig");
 const a = @import("DominatorTree.zig");
 const wtf = @import("LoopAnalysis.zig");
 const IndexedMap = @import("indexed_map.zig").IndexedMap;
@@ -71,6 +72,8 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var alloc = gpa.allocator();
 
+    // var instructio = std.heap.MemoryPool(std.ArrayListUnmanaged(ir.Index)).init(alloc);
+
     var func = Function.init(alloc, Signature{
         .ret = types.I32,
         .args = .{},
@@ -82,6 +85,8 @@ pub fn main() !void {
 
     const b = try func.appendBlock(alloc);
     const b2 = try func.appendBlock(alloc);
+
+    // var args = (try instructio.create());
     _ = try func.appendInst(
         alloc,
         b,
@@ -101,6 +106,7 @@ pub fn main() !void {
     const cfg = try ControlFlowGraph.fromFunction(alloc, &func);
 
     var domtree = a{};
-    try domtree.compute(alloc, &cfg, &func);
+    try domtree.compute(alloc, &cfg);
     std.log.info("{any}", .{domtree.formatter(&func)});
+    std.log.info("{any}", .{@sizeOf(Instruction)});
 }

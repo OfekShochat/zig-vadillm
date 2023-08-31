@@ -49,8 +49,8 @@ pub fn find(self: UnionFind, id: Id) Id {
     return current;
 }
 
-/// unites b into a, returns true if b was reparented
-pub fn unite(self: *UnionFind, a: Id, b: Id) bool {
+/// merge b into a, returns true if b was reparented
+pub fn merge(self: *UnionFind, a: Id, b: Id) bool {
     const rep1 = self.find(a);
     const rep2 = self.find(b);
     self.parents.items[rep2] = rep1;
@@ -71,19 +71,19 @@ test "unionfind" {
     try std.testing.expectEqual(@as(usize, n), unionfind.parents.items.len);
 
     // first set
-    _ = unionfind.unite(0, 1);
-    _ = unionfind.unite(0, 2);
-    _ = unionfind.unite(0, 3);
+    _ = unionfind.merge(0, 1);
+    _ = unionfind.merge(0, 2);
+    _ = unionfind.merge(0, 3);
 
     // build another set
-    _ = unionfind.unite(6, 7);
-    _ = unionfind.unite(6, 8);
-    _ = unionfind.unite(6, 9);
+    _ = unionfind.merge(6, 7);
+    _ = unionfind.merge(6, 8);
+    _ = unionfind.merge(6, 9);
 
     // should compress all paths
     for (0..n) |i| {
         _ = unionfind.find(@intCast(i));
     }
 
-    try std.testing.expectEqualSlices(Id, &.{0, 0, 0, 0, 4, 5, 6, 6, 6, 6}, unionfind.parents.items);
+    try std.testing.expectEqualSlices(Id, &.{ 0, 0, 0, 0, 4, 5, 6, 6, 6, 6 }, unionfind.parents.items);
 }

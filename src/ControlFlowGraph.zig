@@ -13,10 +13,11 @@ pub const CFGNode = struct {
     succs: HashSet(Index) = .{},
 };
 
+entry_ref: Index,
 nodes: std.AutoHashMapUnmanaged(Index, CFGNode) = .{},
 
 pub fn fromFunction(allocator: std.mem.Allocator, func: *const Function) !ControlFlowGraph {
-    var cfg = ControlFlowGraph{};
+    var cfg = ControlFlowGraph{ .entry_ref = func.entryBlock() };
 
     var iter = func.blocks.iterator();
     while (iter.next()) |kv| {
@@ -32,6 +33,19 @@ pub fn fromFunction(allocator: std.mem.Allocator, func: *const Function) !Contro
 
     return cfg;
 }
+
+// pub fn fromMachineFunction(allocator: std.mem.Allocator, func: *const MachineFunction) !ControlFlowGraph {
+//     var cfg = ControlFlowGraph{};
+
+//     var iter = func.blocks.iterator();
+//     while (iter.next()) |kv| {
+//         for (getBlockSuccs(kv.value_ptr)) |succ| {
+//             cfg.addEdge(allocator, kv.key_ptr.*, succ);
+//         }
+//     }
+
+//     return cfg;
+// }
 
 pub fn deinit(self: *ControlFlowGraph, allocator: std.mem.Allocator) void {
     var iter = self.nodes.valueIterator();
