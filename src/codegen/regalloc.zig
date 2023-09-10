@@ -23,7 +23,12 @@ pub const LocationConstraint = union(enum) {
     none,
     phys_reg,
     stack,
+
+    /// fixed physical register
     fixed_reg: PhysicalReg,
+
+    /// simulates instructions such as `add` that only have two operands but modify one:
+    /// add v2 [late def], v1 [early use], v0 [early use, reuse-reg(0)]
     reuse: u6,
 
     pub fn asBytes(self: LocationConstraint) u8 {
@@ -42,29 +47,28 @@ pub const AccessType = enum(u1) {
     use = 1,
 };
 
-// I don't like this name
-pub const OperandUse = enum(u1) {
+pub const OperandUseTiming = enum(u1) {
     early = 0,
     late = 1,
 };
 
 pub const Operand = struct {
-    /// # An Operand
-    ///
-    /// +-------------+-------------+-------------+-----------+------------+
-    /// | 24-31       | 23          | 22          | 20-21     | 0-19       |
-    /// +-------------+-------------+-------------+-----------+------------+
-    /// | constraints | access type | operand use | reg class | vreg index |
-    /// +-------------+-------------+-------------+-----------+------------+
-    /// # constraints' encoding:
-    /// 00000000 => none
-    /// 00000001 => phys_reg
-    /// 00000010 => stack
-    /// 1xxxxxxx => fixed_reg{xxxxxxx}
-    /// 01xxxxxx => reuse{xxxxxx}
+    //! # An Operand
+    //!
+    //! +-------------+-------------+-------------+-----------+------------+
+    //! | 24-31       | 23          | 22          | 20-21     | 0-19       |
+    //! +-------------+-------------+-------------+-----------+------------+
+    //! | constraints | access type | operand use | reg class | vreg index |
+    //! +-------------+-------------+-------------+-----------+------------+
+    //! # constraints' encoding:
+    //! 00000000 => none
+    //! 00000001 => phys_reg
+    //! 00000010 => stack
+    //! 1xxxxxxx => fixed_reg{xxxxxxx}
+    //! 01xxxxxx => reuse{xxxxxx}
     bits: u32,
 
-    pub fn init(vreg: VirtualReg, access_type: AccessType, constraints: LocationConstraint, operand_use: OperandUse) Operand {
+    pub fn init(vreg: VirtualReg, access_type: AccessType, constraints: LocationConstraint, operand_use: OperandUseTiming) Operand {
         std.debug.assert(vreg.index < (1 << 20));
 
         return Operand{
@@ -100,7 +104,7 @@ pub const Operand = struct {
         return @enumFromInt((self.bits >> 20) & 0b11);
     }
 
-    pub fn operandUse(self: Operand) OperandUse {
+    pub fn operandUse(self: Operand) OperandUseTiming {
         return @enumFromInt((self.bits >> 22) & 0b1);
     }
 
@@ -120,5 +124,5 @@ test "regalloc Operand" {
     try std.testing.expectEqual(LocationConstraint.phys_reg, operand.locationConstraints());
     try std.testing.expectEqual(AccessType.use, operand.accessType());
     try std.testing.expectEqual(RegClass.int, operand.regclass());
-    try std.testing.expectEqual(OperandUse.early, operand.operandUse());
+    try std.testing.expectEqual(OperandUseTiming.early, operand.operandUse());
 }

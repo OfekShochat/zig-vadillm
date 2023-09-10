@@ -6,4 +6,5 @@ comptime {
     _ = @import("parser.zig");
     _ = @import("egg.zig");
     _ = @import("egg/UnionFind.zig");
+    _ = @import("codegen/regalloc.zig");
 }

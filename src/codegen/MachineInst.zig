@@ -9,6 +9,8 @@ vptr: *anyopaque,
 vtable: VTable,
 
 // constants
+
+/// in bytes
 worst_case_size: u32,
 
 pub const VTable = struct {

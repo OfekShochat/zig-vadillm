@@ -39,7 +39,6 @@ pub fn preallocate(self: *DominatorTree, allocator: std.mem.Allocator, blocks: u
     try self.nodes.ensureTotalCapacity(allocator, @intCast(blocks));
 }
 
-// FIXME: replace `func` with the entry_point ref, making DominatorTree Machine/IR independent.
 pub fn compute(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *const ControlFlowGraph) !void {
     if (cfg.nodes.size == 0) {
         // nothing to do, there's only one (or less) live block(s)
@@ -390,8 +389,6 @@ test "DominatorTree.loops" {
     defer domtree.deinit(allocator);
 
     try domtree.compute(allocator, &cfg);
-
-    std.debug.print("{}\n", .{domtree.formatter(&func)});
 
     try std.testing.expect(domtree.dominates(block1, block1));
     try std.testing.expect(domtree.dominates(block2, block2));

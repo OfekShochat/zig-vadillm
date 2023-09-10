@@ -18,6 +18,11 @@ const Signature = @import("function.zig").Signature;
 // pub const Index = u32;
 // pub const GlobalIndex = u32;
 
+pub const std_options = struct {
+    // Set the log level to info
+    pub const log_level = .info;
+};
+
 pub const Target = struct {};
 
 pub const Constant = []const u8;

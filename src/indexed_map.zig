@@ -10,9 +10,13 @@ pub fn IndexedMap(comptime K: type, comptime T: type) type {
             self.values.deinit(allocator);
         }
 
-        pub fn get(self: @This(), key: K) ?*T {
+        pub fn getPtr(self: @This(), key: K) ?*T {
             return self.values.getPtr(key);
         }
+        //
+        // pub fn get(self: @This(), key: K) ?*T {
+        //     return self.values.getPtr(key);
+        // }
 
         pub fn put(self: *@This(), allocator: std.mem.Allocator, value: T) std.mem.Allocator.Error!K {
             const k: K = @intCast(self.values.entries.len);

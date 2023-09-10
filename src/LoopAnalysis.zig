@@ -251,5 +251,7 @@ test "loop analysis" {
     defer loop_analysis.deinit(allocator);
 
     try loop_analysis.compute(allocator, &domtree, &cfg);
-    std.debug.print("{any}\n", .{loop_analysis.loops.get(0)});
+
+    try std.testing.expectEqual(@as(u32, 1), loop_analysis.loops.get(0).?.level);
+    try std.testing.expectEqual(@as(?Loop, null), loop_analysis.loops.get(1));
 }
