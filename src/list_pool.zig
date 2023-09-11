@@ -1,23 +1,44 @@
 const std = @import("std");
 
-pub fn PooledVec(comptime T: type) type {
+pub const SizeClass = u5;
+
+pub fn PooledVector(comptime T: type) type {
     return struct {
-        index: u32,
+        offset: u32,
 
-        pub fn get(self: @This(), vec_pool: *ListPool(T), index: u32) T {
-            // return optional?
-            std.debug.assert(index < vec_pool.getLength(self.index));
-
-            return self.getUnchecked(vec_pool, index);
+        pub fn initCapacity(list_pool: *ListPool(T), initial_size_class: SizeClass) !@This() {
+            return @This(){
+                .offset = try list_pool.alloc(initial_size_class),
+            };
         }
 
-        pub fn getSlice(self: @This(), vec_pool: *ListPool(T)) []T {
-            return vec_pool.get(self.index).?;
+        pub fn get(self: @This(), list_pool: *ListPool(T), index: u32) ?T {
+            const slice = list_pool.get(self.offset) orelse @panic("invalid statet in `PooledVector`");
+
+            if (index >= slice.len) {
+                return null;
+            } else {
+                return slice[index];
+            }
+        }
+
+        pub fn getPtr(self: @This(), list_pool: *ListPool(T), index: u32) ?*T {
+            const slice = list_pool.get(self.offset) orelse @panic("invalid statet in `PooledVector`");
+
+            if (index >= slice.len) {
+                return null;
+            } else {
+                return &slice[index];
+            }
+        }
+
+        pub fn getSlice(self: @This(), list_pool: *ListPool(T)) ?[]T {
+            return list_pool.get(self.index);
         }
     };
 }
 
-fn sizeFor(size_class: u5) u32 {
+fn sizeFor(size_class: SizeClass) u32 {
     return @as(u32, 4) << size_class;
 }
 
@@ -44,7 +65,7 @@ pub fn ListPool(comptime T: type) type {
             self.free.deinit();
         }
 
-        pub fn alloc(self: *@This(), size_class: u4) !u32 {
+        pub fn alloc(self: *@This(), size_class: SizeClass) !u32 {
             if (size_class >= self.free.items.len or self.free.items[size_class] == 0) {
                 const curr_len = self.data.items.len;
                 try self.data.resize(curr_len + sizeFor(size_class));
@@ -87,7 +108,6 @@ pub fn ListPool(comptime T: type) type {
             }
 
             const length: *u32 = @ptrCast(&self.data.items[offset]);
-            std.log.err("{} {}", .{ length.*, offset });
             return self.data.items[offset + 1 ..][0 .. length.* - 1];
         }
     };
@@ -107,8 +127,13 @@ test "ListPool" {
 
     defer list_pool.deinit();
 
-    std.log.err("{}", .{index});
-    std.log.err("{}", .{index2});
-    std.log.err("{}", .{list_pool});
-    std.log.err("{}", .{list_pool.data.items.len});
+    try std.testing.expectEqual(@as(u32, 0), index);
+    try std.testing.expectEqual(@as(usize, 31), list_pool.get(index).?.len);
+
+    try std.testing.expectEqual(@as(u32, 32), index2);
+    try std.testing.expectEqual(@as(usize, 15), list_pool.get(index2).?.len);
+
+    var vec = try PooledVector(Yhali).initCapacity(&list_pool, 3);
+    vec.getPtr(&list_pool, 0).?.* = Yhali{.is_good = true, .die = 0 };
+    try std.testing.expectEqual(vec.get(&list_pool, 0).?, Yhali{.is_good = true, .die = 0 });
 }
