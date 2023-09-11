@@ -12,6 +12,10 @@ pub fn PooledVector(comptime T: type) type {
             };
         }
 
+        pub fn deinit(self: @This(), list_pool: *ListPool(T)) !void {
+            try list_pool.dealloc(self.offset);
+        }
+
         pub fn get(self: @This(), list_pool: *ListPool(T), index: u32) ?T {
             const slice = list_pool.get(self.offset) orelse @panic("invalid statet in `PooledVector`");
 
@@ -93,7 +97,10 @@ pub fn ListPool(comptime T: type) type {
             length.* = 0;
 
             if (self.free.items.len <= size_class) {
+                // resize and fill with zeros
+                const old_len = self.free.items.len;
                 try self.free.resize(size_class + 1);
+                @memset(self.free.items[old_len..], 0);
             }
 
             // prepend the head into the free chunks list
@@ -108,6 +115,11 @@ pub fn ListPool(comptime T: type) type {
             }
 
             const length: *u32 = @ptrCast(&self.data.items[offset]);
+
+            if (length.* == 0) {
+                return null;
+            }
+
             return self.data.items[offset + 1 ..][0 .. length.* - 1];
         }
     };
@@ -121,19 +133,25 @@ test "ListPool" {
 
     var list_pool = ListPool(Yhali).init(std.testing.allocator);
     const index = try list_pool.alloc(3);
-    try list_pool.dealloc(3);
+
+    try std.testing.expectEqual(@as(u32, 0), index);
+    try std.testing.expectEqual(@as(usize, 31), list_pool.get(index).?.len);
+
+    try list_pool.dealloc(index);
+
+    try std.testing.expectEqual(@as(?[]Yhali, null), list_pool.get(index));
 
     const index2 = try list_pool.alloc(2);
 
     defer list_pool.deinit();
 
-    try std.testing.expectEqual(@as(u32, 0), index);
-    try std.testing.expectEqual(@as(usize, 31), list_pool.get(index).?.len);
-
     try std.testing.expectEqual(@as(u32, 32), index2);
     try std.testing.expectEqual(@as(usize, 15), list_pool.get(index2).?.len);
 
     var vec = try PooledVector(Yhali).initCapacity(&list_pool, 3);
+    defer vec.deinit(&list_pool) catch @panic("cannot allocate to free list?");
+
+
     vec.getPtr(&list_pool, 0).?.* = Yhali{.is_good = true, .die = 0 };
     try std.testing.expectEqual(vec.get(&list_pool, 0).?, Yhali{.is_good = true, .die = 0 });
 }
