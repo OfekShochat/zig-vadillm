@@ -41,7 +41,7 @@ pub fn DequeAligned(comptime T: type, comptime alignment: ?u29) type {
                 return;
             }
 
-            var better_capacity = self.capacity();
+            var better_capacity = new_capacity;
             while (true) {
                 better_capacity +|= better_capacity / 2 + 8;
                 if (better_capacity >= new_capacity) break;
@@ -54,7 +54,9 @@ pub fn DequeAligned(comptime T: type, comptime alignment: ?u29) type {
             const old_capacity = self.capacity();
 
             const old_memory = self.items;
-            if (!self.allocator.resize(old_memory, new_capacity)) {
+            if (self.allocator.resize(old_memory, new_capacity)) {
+                self.items.len = new_capacity;
+            } else {
                 const new_memory = try self.allocator.alloc(T, new_capacity);
                 @memcpy(new_memory[0..self.capacity()], self.items);
 
@@ -194,14 +196,16 @@ pub fn DequeAligned(comptime T: type, comptime alignment: ?u29) type {
 }
 
 test "deque append/prepend" {
+    const range_upper = 200;
+
     var deque = try Deque(u32).initCapacity(std.testing.allocator, 3);
     defer deque.deinit();
 
-    for (0..10) |i| {
+    for (0..range_upper) |i| {
         try deque.append(@intCast(i));
     }
 
-    for (0..10) |i| {
+    for (0..range_upper) |i| {
         try deque.prepend(@intCast(i));
     }
 
@@ -209,7 +213,7 @@ test "deque append/prepend" {
 
     try std.testing.expectEqual(@as(u32, 1), deque.popFront().?);
 
-    var i: u32 = @intCast(9);
+    var i: u32 = @intCast(range_upper - 1);
     while (true) : (i -= 1) {
         try std.testing.expectEqual(i, deque.popFront().?);
         try std.testing.expectEqual(i, deque.popBack().?);
