@@ -149,7 +149,7 @@ test "ListPool" {
     try std.testing.expectEqual(@as(usize, 15), list_pool.get(index2).?.len);
 
     var vec = try PooledVector(Yhali).initCapacity(&list_pool, 3);
-    defer vec.deinit(&list_pool) catch @panic("cannot allocate to free list?");
+    defer vec.deinit(&list_pool) catch @panic("cannot allocate to free list");
 
 
     vec.getPtr(&list_pool, 0).?.* = Yhali{.is_good = true, .die = 0 };

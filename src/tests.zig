@@ -1,10 +1,21 @@
 comptime {
+    // utilities
+    _ = @import("lisp_parser.zig");
+
+    // datastructures
     _ = @import("types.zig");
-    _ = @import("main.zig");
+    _ = @import("deque.zig");
+    _ = @import("list_pool.zig");
+    _ = @import("indexed_map.zig");
+    _ = @import("hashset.zig");
+
+    // analyses
     _ = @import("DominatorTree.zig");
     _ = @import("LoopAnalysis.zig");
-    _ = @import("parser.zig");
+    _ = @import("ControlFlowGraph.zig");
+
+    // submodules
+    _ = @import("ir.zig");
     _ = @import("egg.zig");
-    _ = @import("egg/UnionFind.zig");
-    _ = @import("codegen/regalloc.zig");
+    _ = @import("codegen.zig");
 }

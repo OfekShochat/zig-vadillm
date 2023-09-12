@@ -21,3 +21,18 @@ pub fn HashSet(comptime T: type) type {
         }
     };
 }
+
+test "hashset write/contains" {
+    const allocator = std.testing.allocator;
+
+    var hashset = HashSet(usize){};
+    defer hashset.deinit(allocator);
+
+    for (0..10) |i| {
+        try hashset.put(allocator, i);
+        try std.testing.expect(hashset.contains(i));
+    }
+
+    try std.testing.expect(!hashset.contains(11));
+    try std.testing.expectEqual(@as(usize, 10), hashset.iter().len);
+}
