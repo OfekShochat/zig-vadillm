@@ -1,5 +1,6 @@
 const std = @import("std");
 const ir = @import("ir.zig");
+const MachineFunction = @import("codegen/MachineFunction.zig");
 
 const Index = ir.Index;
 const Function = ir.Function;
@@ -28,6 +29,21 @@ pub fn fromFunction(allocator: std.mem.Allocator, func: *const Function) !Contro
             },
             .jump => |jump| try cfg.addEdge(allocator, kv.key_ptr.*, jump.block),
             else => {},
+        }
+    }
+
+    return cfg;
+}
+
+pub fn fromMachineFunction(allocator: std.mem.Allocator, func: *const MachineFunction) !ControlFlowGraph{
+    var cfg = ControlFlowGraph{ .entry_ref = 0};
+
+    var iter = func.blocks.iterator();
+    while (iter.next()) |block| {
+        var terminator = block.getTerminator();
+        var branches = terminator.getBranches();
+        for (branches) |branch| {
+            try cfg.addEdge(allocator, block.getBlockByInst(terminator), branch);
         }
     }
 

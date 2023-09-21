@@ -25,3 +25,7 @@ pub fn getAllocatableOperands(self: MachineInst, operands_out: *std.ArrayList(re
 pub fn regTypeForClass(self: MachineInst, class: regalloc.RegClass) types.Type {
     return self.vtable.regTypeForClass(class);
 }
+
+pub fn getBranches(self: MachineInst) *std.ArrayListUnmanaged {
+    return self.vtable.getBranches();
+}
