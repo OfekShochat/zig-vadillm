@@ -1,16 +1,30 @@
 const std = @import("std");
-const BlockRef = @import("main.zig").BlockRef;
 const ControlFlowGraph = @import("../ControlFlowGraph.zig").ControlFlowGraph;
 const Block = @import("main.zig").Block;
 const Index = @import("../ir.zig").Index;
 const MachineFunction = @import("MachineFunction.zig").Function;
+const mem = @import("mem.zig");
+
+pub const LivenessNode = struct {
+    start_of_liverange: Index,
+    end_of_liverange: Index,
+    index: Index,
+};
+
+pub const LiveInBlock = struct {
+    index: Index,
+    pred: Index,
+    succs: std.ArrayList(Index),
+};
 
 pub const LivenessAnalysis = struct {
     cfg: ControlFlowGraph = .{},
-    liveness: std.AutoHashMap(Index, std.ArrayList([2]u32)) = .{},
+    liveness: std.AutoHashMap(Index, std.ArrayList(LivenessNode)) = .{},
+    live_ranges: std.AutoHashMap(Index, std.ArrayList(u32[2])) = .{},
+    number_of_live_ranges: u32 = 0,
 
-    pub fn getLiveIn(blockRef : Index) std.ArrayList {
-        var block = .cfg.nodes[blockRef];
+    pub fn getLiveIn(self: *LivenessAnalysis, blockRef : Index) std.ArrayList {
+        var block = self.cfg.nodes[blockRef];
         var live_vars = std.ArrayList(Index);
 
         for (block.insts) | inst | {
@@ -18,11 +32,12 @@ pub const LivenessAnalysis = struct {
                 live_vars.append(operand);
             }
         }
+
         return live_vars;
     }
 
-    pub fn getLiveOut(blockRef : BlockRef) std.ArrayList{
-        var block = .cfg.nodes[blockRef];
+    pub fn getLiveOut(self: *LivenessAnalysis, blockRef : Index) std.ArrayList{
+        var block = self.cfg.nodes[blockRef];
         var inst = block.getTerminator();
         var live_vars = std.ArrayList(Index);
         var branches = inst.getBranches();
@@ -34,29 +49,117 @@ pub const LivenessAnalysis = struct {
         return live_vars;
     }
 
-    pub fn livenessAnalyse() void {
-        var iter = .cfg.reversePostorderIter();
-        while(iter.next()) |block_ref|{
-            var live_out = getLiveOut(block_ref);
-            for (live_out) |live_var| {
-                try .liveness.put(live_var, block_ref);
+    pub fn computeLiveins(self: *LivenessAnalysis) !void {
+        self.cfg.computePostorder();
+        for(self.cfg.postorder.items) |block_index| {
+            getLiveIn(block_index);
+        }
+    }
+
+    pub fn livenessAnalyse(self: LivenessAnalysis, vreg: Index) void {
+        var live_ranges = self.live_ranges.get(vreg);
+        const number_of_live_ranges = self.number_of_live_ranges;
+
+        var vreg_liveness = try self.liveness.get(vreg);
+        for(vreg_liveness.items) |liveInterval| {
+
+            live_ranges[number_of_live_ranges][0] = liveInterval;
+            live_ranges[number_of_live_ranges][1] = liveInterval;
+
+            var block = self.cfg.nodes[liveInterval];
+            var branches = block.getTerminator().getBranches();
+            if(branches.items.len > 1) {
+
+                for(branches.items) |branch|{
+                    live_ranges.append(live_ranges[number_of_live_ranges]);
+                    self.number_of_live_ranges += 1;
+                    livenessAnalyse(vreg);
+                }
+
+            } else {
+
+                if(check_if_block_in_liveness(vreg, branches.items[0])) {
+                    live_ranges[number_of_live_ranges][1] = branches.items[0];
+                }
+
             }
         }
+
+        return;
+    }
+
+    pub fn check_if_block_in_liveness(self: LivenessAnalysis, vreg: Index, block: Index) bool {
+        var liveness = self.liveness.get(vreg);
+        for(liveness) |live_var| {
+            if(live_var == block) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    pub fn buildRanges(liveInBlock: *std.ArrayList(LiveInBlock)) std.ArrayList(LivenessNode) {
+        sort(liveInBlock, 0, liveInBlock.items.len - 1);
+        var node = LivenessNode{.pred = liveInBlock.items[0].block, .succs = liveInBlock.items[0].block, .index = liveInBlock.items[0].index};
+        var liveness_list = std.ArrayList(LivenessNode);
+
+        for(liveInBlock.items()) |block| {
+            var current_node = liveness_list.items.len - 1;
+
+            if (liveness_list.items[current_node].sucss + 1 == block.block) {
+                node.succs = block.block;
+
+            } else {
+                liveness_list.addOne();
+                liveness_list.items[current_node+1] = LivenessNode {.pred = block.block, .succs = block.block, .index = block.index};
+            }
+
+        }
+
+        return liveness_list;
+    }
+
+    pub fn sort(liveInBlock: *std.ArrayList(LiveInBlock), lo: Index, hi: Index) void {
+        if (lo < hi) {
+            var p = partition(liveInBlock, lo, hi);
+            sort(liveInBlock, lo, @min(p, p -% 1));
+            sort(liveInBlock, p + 1, hi);
+        }
+    }
+
+    pub fn partition(liveInBlock: *std.ArrayList(LiveInBlock), lo: usize, hi: usize) usize {
+        var pivot = liveInBlock.items[hi].block;
+        var i = lo;
+        var j = lo;
+        while (j < hi) : (j += 1) {
+            if (liveInBlock.items[j].block < pivot) {
+                mem.swap(i32, &liveInBlock.items[i], &liveInBlock.items[j]);
+                i = i + 1;
+            }
+        }
+        mem.swap(i32, &liveInBlock.items[i], &liveInBlock.items[hi]);
+        return i;
     }
 };
 
 test "LivenessAnalysis" {
     // const types = @import("types.zig");
-    // const Instruction = @import("main.zig").Instruction;
-    // var allocator = std.testing.allocator;
+    const Instruction = @import("dummy_inst.zig").Instruction;
+    var allocator = std.testing.allocator;
 
-    // var func = MachineFunction.init(allocator, "add", Signature{
-        // .ret = types.I32,
-        // .args = .{},
-    // });
-    // defer func.deinit(allocator);
+    var func = MachineFunction.init(allocator, "add", Signature{
+        .ret = types.I32,
+        .args = .{},
+    });
+    defer func.deinit(allocator);
 
-    // try func.appendParam(allocator, types.I32);
+    var basic_block = std.ArrayList(Insts);
+    basic_block.append();
+
+    func.addBlock();
+
+    try func.appendParam(allocator, types.I32);
 
     // const block1 = try func.appendBlock(allocator);
     // const block2 = try func.appendBlock(allocator);

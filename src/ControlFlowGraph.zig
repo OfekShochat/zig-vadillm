@@ -16,6 +16,7 @@ pub const CFGNode = struct {
 
 entry_ref: Index,
 nodes: std.AutoHashMapUnmanaged(Index, CFGNode) = .{},
+postorder: std.ArrayListUnmanaged(Index) = .{},
 
 pub fn fromFunction(allocator: std.mem.Allocator, func: *const Function) !ControlFlowGraph {
     var cfg = ControlFlowGraph{ .entry_ref = func.entryBlock() };
@@ -84,6 +85,42 @@ fn addEdge(self: *ControlFlowGraph, allocator: std.mem.Allocator, from: Index, t
 
 pub fn get(self: ControlFlowGraph, block_ref: Index) ?*const CFGNode {
     return self.nodes.getPtr(block_ref);
+}
+
+fn computePostorder(self: *ControlFlowGraph, allocator: std.mem.Allocator) !void {
+    // we shouldn't visit blocks more than twice (loops)
+    var visited_blocks = std.AutoHashMap(Index, void).init(allocator);
+    defer visited_blocks.deinit();
+
+    var stack = std.ArrayList(StackEntry).init(allocator);
+    defer stack.deinit();
+
+    try stack.append(.{ .block_ref = self.entry_ref, .visited = .None });
+
+    // we visit twice: the first, to add the children; and the second, to add the node itself
+    while (stack.items.len != 0) {
+        const curr_entry = stack.pop();
+
+        if (curr_entry.visited == .Once) {
+            try self.postorder.append(allocator, curr_entry.block_ref);
+            continue;
+        }
+
+        const cfg_node = self.get(curr_entry.block_ref) orelse @panic("CFG inserted non-existent successors");
+
+        if (visited_blocks.contains(curr_entry.block_ref)) {
+            continue;
+        }
+
+        try visited_blocks.put(curr_entry.block_ref, void{});
+
+        // mark the block as visited for the second pass
+        try stack.append(.{ .block_ref = curr_entry.block_ref, .visited = .Once });
+
+        for (cfg_node.succs.iter()) |succ| {
+            try stack.append(.{ .block_ref = succ, .visited = .None });
+        }
+    }
 }
 
 const types = @import("types.zig");

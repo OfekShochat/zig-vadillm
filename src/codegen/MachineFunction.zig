@@ -44,3 +44,18 @@ pub fn getBlockByInst(self: MachineFunction, instIdx: Index) Index {
         }
     }
 }
+
+pub fn addBlock(self: MachineFunction, new_block: *std.ArrayListUnmanaged) {
+    BlockRange lastBlock = blocks.getLast();
+    usize start_of_new_block = lastBlock.end + 1;
+    insts = concatenateArrayLists(insts, new_block);
+    blocks.append(BlockRange{.start = start_of_new_block, .end = start_of_new_block + new_block.items.len});
+}
+
+fn concatenateArrayLists(combineTo: *std.ArrayList(comptime T), appendFrom: *std.ArrayList(comptime T) !T) T {
+    while (appendFrom.items.len > 0) : (comptime appendFrom.items.len > 0) {
+        const element = appendFrom.items[0];
+        _ = combineTo.append(element);
+        _ = appendFrom.items.pop();
+    }
+}
