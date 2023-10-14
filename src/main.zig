@@ -11,13 +11,6 @@ const ControlFlowGraph = @import("ControlFlowGraph.zig");
 const Instruction = @import("instructions.zig").Instruction;
 const Signature = @import("function.zig").Signature;
 
-// pub const Index = u32;
-// pub const Index = u32;
-// pub const Index = u32;
-// pub const Index = u32;
-// pub const Index = u32;
-// pub const GlobalIndex = u32;
-
 pub const std_options = struct {
     // Set the log level to info
     pub const log_level = .info;

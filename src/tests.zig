@@ -1,6 +1,6 @@
 comptime {
     // utilities
-    _ = @import("lisp_parser.zig");
+    _ = @import("lisp.zig");
 
     // datastructures
     _ = @import("types.zig");

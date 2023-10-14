@@ -2,6 +2,11 @@
 
 const std = @import("std");
 
+pub const Place = packed struct {
+    inst_index: u31,
+    before: bool,
+};
+
 pub const RegClass = enum(u2) {
     int,
     float,
@@ -17,6 +22,11 @@ pub const PhysicalReg = struct {
     class: RegClass,
     /// the unique encoding of a register. should fit into 7 bits.
     encoding: u7,
+};
+
+pub const Register = union(enum) {
+    preg: PhysicalReg,
+    vreg: VirtualReg,
 };
 
 pub const LocationConstraint = union(enum) {
@@ -116,6 +126,10 @@ pub const Operand = struct {
         return self.bits & 0x3FF;
     }
 };
+
+// 1. color known nodes
+// 2. somehow a solver step that colors the graph and minimizes total spill weight
+// 3. output stitches (`mov`s) to connect everything together and allocations to know where to place stuff
 
 test "regalloc Operand" {
     // use constants and also make a test that should panic (index too high?)
