@@ -2,11 +2,6 @@
 
 const std = @import("std");
 
-pub const Place = packed struct {
-    inst_index: u31,
-    before: bool,
-};
-
 pub const RegClass = enum(u2) {
     int,
     float,
@@ -127,11 +122,12 @@ pub const Operand = struct {
     }
 };
 
-// 1. color known nodes
-// 2. somehow a solver step that colors the graph and minimizes total spill weight
-// 3. output stitches (`mov`s) to connect everything together and allocations to know where to place stuff
+pub const Stitch = struct {
+    from: PhysicalReg,
+    to: PhysicalReg,
+};
 
-test "regalloc Operand" {
+test "regalloc.Operand" {
     // use constants and also make a test that should panic (index too high?)
     const operand = Operand.init(VirtualReg{ .class = .int, .index = 5 }, .use, .phys_reg, .early);
     try std.testing.expectEqual(@as(u32, 5), operand.vregIndex());

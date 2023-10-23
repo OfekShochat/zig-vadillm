@@ -50,11 +50,10 @@ fn findLoopHeaders(
     domtree: *const DominatorTree,
     cfg: *const ControlFlowGraph,
 ) !void {
-    var iter = domtree.reversePostorderIter();
-    while (iter.next()) |block_ref| {
+    for (cfg.rpo.items) |block_ref| {
         const preds = cfg.get(block_ref).?.preds;
         for (preds.iter()) |pred| {
-            if (domtree.dominates(block_ref, pred)) {
+            if (domtree.blockDominates(block_ref, pred)) {
                 try self.loops.put(allocator, self.loop_ref, Loop{
                     .header = block_ref,
                     .parent = null,
@@ -104,7 +103,7 @@ fn discoverLoopBlocks(
 
         // step 1: find backedges and add to stack.
         for (cfg.get(loop_entry.value_ptr.header).?.preds.iter()) |pred| {
-            if (domtree.dominates(loop_entry.value_ptr.header, pred)) {
+            if (domtree.blockDominates(loop_entry.value_ptr.header, pred)) {
                 try stack.append(pred);
             }
         }

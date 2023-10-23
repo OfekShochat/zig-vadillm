@@ -9,7 +9,11 @@ const HashSet = @import("hashset.zig").HashSet;
 
 const DominatorTree = @This();
 
-postorder: std.ArrayListUnmanaged(Index) = .{},
+pub const ProgPoint = struct {
+    block: Index,
+    inst: Index,
+};
+
 nodes: std.AutoHashMapUnmanaged(Index, DomNode) = .{},
 
 pub const DomNode = struct {
@@ -20,18 +24,7 @@ pub const DomNode = struct {
     rpo_order: u32,
 };
 
-const Visited = enum {
-    None,
-    Once,
-};
-
-const StackEntry = struct {
-    block_ref: Index,
-    visited: Visited,
-};
-
 pub fn deinit(self: *DominatorTree, allocator: std.mem.Allocator) void {
-    self.postorder.deinit(allocator);
     self.nodes.deinit(allocator);
 }
 
@@ -45,47 +38,18 @@ pub fn compute(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *const C
         return;
     }
 
-    try self.computePostorder(allocator, cfg);
     try self.computeDomtree(allocator, cfg);
 }
 
-fn computePostorder(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *const ControlFlowGraph) !void {
-    // we shouldn't visit blocks more than twice (loops)
-    var visited_blocks = std.AutoHashMap(Index, void).init(allocator);
-    defer visited_blocks.deinit();
-
-    var stack = std.ArrayList(StackEntry).init(allocator);
-    defer stack.deinit();
-
-    try stack.append(.{ .block_ref = cfg.entry_ref, .visited = .None });
-
-    // we visit twice: the first, to add the children; and the second, to add the node itself
-    while (stack.items.len != 0) {
-        const curr_entry = stack.pop();
-
-        if (curr_entry.visited == .Once) {
-            try self.postorder.append(allocator, curr_entry.block_ref);
-            continue;
-        }
-
-        const cfg_node = cfg.get(curr_entry.block_ref) orelse @panic("CFG inserted non-existent successors");
-
-        if (visited_blocks.contains(curr_entry.block_ref)) {
-            continue;
-        }
-
-        try visited_blocks.put(curr_entry.block_ref, void{});
-
-        // mark the block as visited for the second pass
-        try stack.append(.{ .block_ref = curr_entry.block_ref, .visited = .Once });
-
-        for (cfg_node.succs.iter()) |succ| {
-            try stack.append(.{ .block_ref = succ, .visited = .None });
-        }
+pub fn dominates(self: DominatorTree, a: ProgPoint, b: ProgPoint) bool {
+    if (a.block == b.block) {
+        return a.inst < b.inst;
     }
+
+    return self.blockDominates(a.block, b.block);
 }
 
-pub fn dominates(self: DominatorTree, a: Index, b: Index) bool {
+pub fn blockDominates(self: DominatorTree, a: Index, b: Index) bool {
     // blocks that aren't in the domtree cannot be checked for dominance
     if (!self.nodes.contains(a) or !self.nodes.contains(b)) {
         return false;
@@ -143,8 +107,7 @@ fn computeDomtree(self: *DominatorTree, allocator: std.mem.Allocator, cfg: *cons
     while (changed) {
         changed = false;
 
-        var iter = self.reversePostorderIter();
-        while (iter.next()) |block_ref| {
+        for (cfg.rpo.items) |block_ref| {
             if (block_ref == cfg.entry_ref) {
                 continue;
             }
@@ -164,8 +127,7 @@ fn computeInitialState(self: *DominatorTree, allocator: std.mem.Allocator, cfg: 
 
     var rpo_order: u32 = 1;
 
-    var iter = self.reversePostorderIter();
-    while (iter.next()) |block_ref| {
+    for (cfg.rpo.items) |block_ref| {
         if (block_ref == entry_ref) {
             continue;
         }
@@ -204,37 +166,18 @@ fn commonDominatingAncestor(self: DominatorTree, block1: Index, block2: Index) I
     return finger1;
 }
 
-pub fn reversePostorderIter(self: *const DominatorTree) RPOIterator {
-    return RPOIterator{
-        .idx = self.postorder.items.len,
-        .domtree = self,
-    };
-}
-
-pub fn formatter(self: *const DominatorTree, func: *const Function) DominatorTreeFormatter {
+pub fn formatter(self: *const DominatorTree, cfg: *const ControlFlowGraph, func: *const Function) DominatorTreeFormatter {
     return DominatorTreeFormatter{
         .func = func,
         .dominator_tree = self,
+        .cfg = cfg,
     };
 }
-
-pub const RPOIterator = struct {
-    idx: usize,
-    domtree: *const DominatorTree,
-
-    pub fn next(self: *RPOIterator) ?Index {
-        if (self.idx > 0) {
-            self.idx -= 1;
-            return self.domtree.postorder.items[self.idx];
-        }
-
-        return null;
-    }
-};
 
 pub const DominatorTreeFormatter = struct {
     func: *const Function,
     dominator_tree: *const DominatorTree,
+    cfg: *const ControlFlowGraph,
 
     pub fn format(
         self: DominatorTreeFormatter,
@@ -246,14 +189,13 @@ pub const DominatorTreeFormatter = struct {
         try writer.writeAll("  // node attributes\n");
         try writer.writeAll("  // graph attributes\n");
 
-        for (self.dominator_tree.postorder.items) |block_ref| {
+        for (self.cfg.postorder.items) |block_ref| {
             try writer.print("  {} [label=\"{}\"];\n", .{ block_ref, block_ref });
         }
 
         try writer.writeAll("  // edge attributes\n");
 
-        var iter = self.dominator_tree.reversePostorderIter();
-        while (iter.next()) |block_ref| {
+        for (self.cfg.rpo.items) |block_ref| {
             if (block_ref == self.func.entryBlock()) {
                 continue;
             }
@@ -317,8 +259,8 @@ test "DominatorTree.simple" {
 
     try domtree.compute(allocator, &cfg);
 
-    try std.testing.expect(domtree.dominates(block1, block2));
-    try std.testing.expect(!domtree.dominates(block2, block1));
+    try std.testing.expect(domtree.blockDominates(block1, block2));
+    try std.testing.expect(!domtree.blockDominates(block2, block1));
 }
 
 test "DominatorTree.loops" {
@@ -390,15 +332,15 @@ test "DominatorTree.loops" {
 
     try domtree.compute(allocator, &cfg);
 
-    try std.testing.expect(domtree.dominates(block1, block1));
-    try std.testing.expect(domtree.dominates(block2, block2));
-    try std.testing.expect(domtree.dominates(block3, block3));
+    try std.testing.expect(domtree.blockDominates(block1, block1));
+    try std.testing.expect(domtree.blockDominates(block2, block2));
+    try std.testing.expect(domtree.blockDominates(block3, block3));
 
-    try std.testing.expect(domtree.dominates(block1, block2));
-    try std.testing.expect(domtree.dominates(block1, block3));
+    try std.testing.expect(domtree.blockDominates(block1, block2));
+    try std.testing.expect(domtree.blockDominates(block1, block3));
 
-    try std.testing.expect(domtree.dominates(block2, block3));
+    try std.testing.expect(domtree.blockDominates(block2, block3));
 
-    try std.testing.expect(!domtree.dominates(block3, block1));
-    try std.testing.expect(!domtree.dominates(block3, block2)); // backedges aren't considered dominating
+    try std.testing.expect(!domtree.blockDominates(block3, block1));
+    try std.testing.expect(!domtree.blockDominates(block3, block2)); // backedges aren't considered dominating
 }

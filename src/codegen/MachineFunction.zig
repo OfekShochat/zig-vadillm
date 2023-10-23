@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const regalloc = @import("regalloc.zig");
 const codegen = @import("../codegen.zig");
 const MachineInst = @import("MachineInst.zig");
 const PooledVector = @import("../list_pool.zig").PooledVector;
@@ -22,6 +23,8 @@ pub const TerminatorData = union(enum) {
 };
 
 pub const MachBlock = struct {
+    index_start: codegen.Index,
+    params: []const regalloc.VirtualReg,
     insts: []const MachineInst,
     terminator_data: TerminatorData,
 };
@@ -34,5 +37,5 @@ pub fn getBlock(self: MachineFunction, block_id: codegen.Index) ?*MachBlock {
         return null;
     }
 
-    return self.block.items[block_id];
+    return &self.block.items[block_id];
 }

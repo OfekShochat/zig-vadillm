@@ -194,7 +194,7 @@ pub fn parse(allocator: std.mem.Allocator, source: []const u8) !Scope {
     return scope_stack.getLast();
 }
 
-test "poop" {
+test "lisp" {
     const source =
         \\(:def hello-adam3 (int int) int
         \\    (add arg0 arg1))
