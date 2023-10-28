@@ -17,16 +17,17 @@ pub const BlockCall = struct {
     operands: PooledVector(codegen.Index),
 };
 
-pub const TerminatorData = union(enum) {
-    unconditional: BlockCall,
-    conditional: PooledVector(BlockCall),
-};
+// pub const TerminatorData = union(enum) {
+//     unconditional: BlockCall,
+//     conditional: PooledVector(BlockCall),
+// };
 
 pub const MachBlock = struct {
     index_start: codegen.Index,
     params: []const regalloc.VirtualReg,
     insts: []const MachineInst,
-    terminator_data: TerminatorData,
+    succ_phis: []const BlockCall,
+    // terminator_data: TerminatorData,
 };
 
 blocks: std.ArrayList(MachBlock),

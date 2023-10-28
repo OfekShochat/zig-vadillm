@@ -28,6 +28,7 @@ pub fn regTypeForClass(self: MachineInst, class: regalloc.RegClass) types.Type {
     return self.vtable.regTypeForClass(class);
 }
 
+// is call?
 // pub fn getTerminatorDataOrNull(self: MachineInst, ) {
 
 // }
