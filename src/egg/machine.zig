@@ -1,0 +1,3 @@
+const Instruction = union(enum) {
+
+};
