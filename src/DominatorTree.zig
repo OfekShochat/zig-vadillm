@@ -189,7 +189,7 @@ pub const DominatorTreeFormatter = struct {
         try writer.writeAll("  // node attributes\n");
         try writer.writeAll("  // graph attributes\n");
 
-        for (self.cfg.postorder.items) |block_ref| {
+        for (self.cfg.rpo.items) |block_ref| {
             try writer.print("  {} [label=\"{}\"];\n", .{ block_ref, block_ref });
         }
 

@@ -40,8 +40,9 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
     return struct {
         union_find: UnionFind,
         eclasses: std.AutoHashMap(Id, EClass),
-        memo: std.AutoHashMap(ENode, Id),
-        dirty: std.ArrayList(Id),
+        memo: std.AutoHashMap(L, Id),
+        dirty_ids: std.ArrayList(Id),
+        dirty: bool,
         allocator: std.mem.Allocator,
 
         comptime {
@@ -56,15 +57,10 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
         };
 
         pub const EClass = struct {
-            // dude how do I not save the enode itself it feels bad
-            parents: std.AutoArrayHashMapUnmanaged(ENode, Id) = .{},
-            nodes: std.ArrayListUnmanaged(ENode),
+            // dude how do I not save the enode itself it feels shit
+            children: std.AutoArrayHashMapUnmanaged(L, Id) = .{},
+            nodes: std.ArrayListUnmanaged(L),
             ctx: C,
-        };
-
-        pub const ENode = struct {
-            op: L,
-            children: std.ArrayListUnmanaged(Id),
         };
 
         pub fn init(allocator: std.mem.Allocator) @This() {
@@ -77,40 +73,43 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             };
         }
 
-        fn lookup(self: @This(), enode: *ENode) ?Id {
+        fn lookup(self: @This(), enode: *L) ?Id {
             self.canonicalize(enode);
             return self.memo.get(enode.*);
         }
 
-        fn addEclass(self: *@This(), first_enode: ENode) !Id {
+        pub fn get(self: @This(), id: Id) ?*EClass {
+            return self.eclasses.getPtr(id);
+        }
+
+        fn addEclass(self: *@This(), first_enode: L) !Id {
             if (self.lookup(first_enode)) |existing| {
                 return existing;
             }
 
             const id = self.union_find.makeSet();
 
-            var nodes = std.ArrayListUnmanaged(ENode){};
+            var nodes = std.ArrayListUnmanaged(L){};
             try nodes.append(self.allocator, first_enode);
 
             const eclass = EClass{ .id = id, .nodes = nodes, .ctx = .{} };
 
-            for (first_enode.children.items) |child| {
+            for (first_enode.children()) |child| {
                 var eclass_child = self.eclasses.getPtr(child) orelse @panic("a saved enode's child is invalid.");
-                try eclass_child.parents.put(self.allocator, first_enode, id);
+                try eclass_child.children.put(self.allocator, first_enode, id);
             }
 
             try self.eclasses.put(id, eclass);
             try self.memo.putNoClobber(first_enode, id);
 
             // here can call a callback?
-            // self.dirty = true;
+            self.dirty = true;
 
             return id;
         }
 
-        // this is a horrible name. updateParentsToRepresentatives?
-        pub fn canonicalize(self: @This(), enode: *ENode) void {
-            for (enode.children.items) |*child| {
+        pub fn canonicalize(self: @This(), enode: *L) void {
+            for (enode.children()) |*child| {
                 child.* = self.union_find.find(child.*);
             }
         }
@@ -121,14 +120,14 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             }
 
             const new_id = self.union_find.merge(a, b);
-            try self.dirty.append(new_id);
+            try self.dirty_ids.append(new_id);
 
             return new_id;
         }
 
         fn repair(self: *@This(), eclass_id: Id) void {
             var eclass = self.eclasses.getPtr(eclass_id).?;
-            for (eclass.parents.items) |parent| {
+            for (eclass.children.items) |parent| {
                 std.debug.assert(self.memo.remove(parent.enode));
                 self.canonicalize(&parent.enode);
 
@@ -138,23 +137,27 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
                 );
             }
 
-            var visited_parents = std.AutoArrayHashMap(ENode, Id).init(self.allocator);
+            var visited_children = std.AutoArrayHashMap(L, Id).init(self.allocator);
 
-            for (eclass.parents.items) |parent| {
-                if (visited_parents.contains(parent.enode)) {
-                    try self.merge(parent.eclass_id, visited_parents.get(parent.enode));
+            for (eclass.children.items) |parent| {
+                if (visited_children.contains(parent.enode)) {
+                    try self.merge(parent.eclass_id, visited_children.get(parent.enode));
                 }
 
-                try visited_parents.put(parent.enode, self.union_find.find(parent.eclass_id));
+                try visited_children.put(parent.enode, self.union_find.find(parent.eclass_id));
             }
 
-            eclass.parents.deinit();
-            eclass.parents = visited_parents.unmanaged;
+            eclass.children.deinit();
+            eclass.children = visited_children.unmanaged;
+        }
+
+        pub fn find(self: @This(), id: Id) Id {
+            self.union_find.find(id);
         }
 
         fn rebuild(self: *@This()) void {
-            while (self.dirty.items.len > 0) {
-                var todo = try self.dirty.toOwnedSlice();
+            while (self.dirty_ids.items.len > 0) {
+                var todo = try self.dirty_ids.toOwnedSlice();
                 for (todo) |eclass| {
                     self.repair(self.union_find.find(eclass));
                 }
@@ -163,7 +166,17 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
     };
 }
 
+const Test = union(enum) {
+    stuff: [2]Id,
+};
+
 test "egraph" {
-    var poop = EGraph();
-    _= poop;
+    var poop = Test{ .stuff = .{ 1, 2 } };
+    var a = switch (poop) {
+        .stuff => |*stuff| stuff,
+    };
+
+    a[0] = 2;
+
+    std.log.err("{any}", .{poop.stuff});
 }
