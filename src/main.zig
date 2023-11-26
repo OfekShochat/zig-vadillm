@@ -105,6 +105,6 @@ pub fn main() !void {
 
     var domtree = a{};
     try domtree.compute(alloc, &cfg);
-    std.log.info("{any}", .{domtree.formatter(&func)});
+    std.log.info("{any}", .{domtree.formatter(&cfg, &func)});
     std.log.info("{any}", .{@sizeOf(Instruction)});
 }
