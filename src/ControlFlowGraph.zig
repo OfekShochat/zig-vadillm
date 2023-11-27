@@ -90,7 +90,6 @@ fn computePostorder(self: *ControlFlowGraph, allocator: std.mem.Allocator) !void
     }
 }
 
-
 // pub fn fromMachineFunction(allocator: std.mem.Allocator, func: *const MachineFunction) !ControlFlowGraph {
 //     var cfg = ControlFlowGraph{};
 

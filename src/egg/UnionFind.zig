@@ -4,7 +4,7 @@
 
 const std = @import("std");
 
-const egg = @import("../egg.zig");
+const egg = @import("egg.zig");
 const Id = egg.Id;
 
 const UnionFind = @This();

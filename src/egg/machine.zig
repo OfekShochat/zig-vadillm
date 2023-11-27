@@ -1,28 +1,30 @@
 const std = @import("std");
-const egg = @import("../egg.zig");
+const egg = @import("egg.zig");
 
 pub const Match = struct { symbol: usize, id: egg.Id };
 pub const Substitution = []const Match;
 
 pub fn Program(comptime L: type) type {
     return struct {
+        const LT = @typeInfo(L).Union.tag_type.?;
+
         const Instruction = union(enum) {
             bind: struct {
                 reg: usize,
-                op: L,
+                op: LT,
                 len: usize,
                 out_reg: usize,
             },
             check: struct {
                 reg: usize,
-                op: L,
+                op: LT,
             },
             compare: struct { a: usize, b: usize },
             yield: []const usize,
         };
 
         pub const PatternAst = union(enum) {
-            enode: struct { op: L, children: ?[]const PatternAst },
+            enode: struct { op: LT, children: ?[]const PatternAst },
             symbol: usize,
         };
 
@@ -30,6 +32,7 @@ pub fn Program(comptime L: type) type {
         r2v: std.AutoHashMap(usize, usize),
 
         pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            allocator.free(self.insts[self.insts.len - 1].yield);
             allocator.free(self.insts);
             self.r2v.deinit();
         }
@@ -49,7 +52,7 @@ pub fn Program(comptime L: type) type {
             var next_reg: usize = 1;
             var insts = std.ArrayList(Instruction).init(allocator);
 
-            while (r2p.popOrNull()) |*entry| {
+            while (r2p.popOrNull()) |entry| {
                 switch (entry.value) {
                     .enode => |enode| {
                         if (enode.children) |children| {
@@ -79,6 +82,8 @@ pub fn Program(comptime L: type) type {
                 }
             }
 
+            try insts.append(.{ .yield = try allocator.dupe(usize, v2r.values()) });
+
             var r2v = std.AutoHashMap(usize, usize).init(allocator);
 
             var iter = v2r.iterator();
@@ -107,15 +112,17 @@ pub fn Machine(comptime L: type) type {
         stack: std.ArrayList(Binder),
         index: usize = 0,
 
+        const LT = @typeInfo(L).Union.tag_type.?;
+
         const EClassSearcher = struct {
-            op: L,
+            op: LT,
             len: usize,
             nodes: []L,
 
             fn next(self: *EClassSearcher) ?[]const egg.Id {
                 for (self.nodes, 0..) |node, i| {
-                    if (std.meta.activeTag(node) == std.meta.activeTag(self.op) and node.childrenConst().?.len == self.len) {
-                        self.nodes = self.nodes[i + i ..];
+                    if (node == self.op and node.childrenConst().?.len == self.len) {
+                        self.nodes = self.nodes[i + 1 ..];
                         return node.childrenConst();
                     }
                 }
@@ -140,18 +147,20 @@ pub fn Machine(comptime L: type) type {
         }
 
         fn backtrack(self: *@This()) !void {
-            var binder = self.stack.getLastOrNull() orelse return error.StackEmpty;
+            if (self.stack.items.len == 0) {
+                return error.StackEmpty;
+            }
+            var binder = &self.stack.items[self.stack.items.len - 1];
 
             while (true) {
                 if (binder.searcher.next()) |matched| {
                     const new_len = binder.out + matched.len;
                     try self.regs.resize(new_len);
                     @memcpy(self.regs.items[binder.out..new_len], matched);
-
                     self.index = binder.next;
                     break;
                 } else {
-                    binder = self.stack.pop();
+                    _ = self.stack.popOrNull() orelse return error.StackEmpty;
                 }
             }
         }
@@ -194,7 +203,7 @@ pub fn Machine(comptime L: type) type {
                         const eclass = egraph.get(self.regs.items[check.reg]).?;
 
                         for (eclass.nodes.items) |node| {
-                            if (std.meta.activeTag(node) == std.meta.activeTag(check.op) and node.childrenConst() == null) {
+                            if (node == check.op and node.childrenConst() == null) {
                                 break;
                             }
                         } else {
@@ -202,14 +211,15 @@ pub fn Machine(comptime L: type) type {
                         }
                     },
                     .compare => |compare| {
-                        const enode_a = egraph.find(self.regs.items[compare.a]);
-                        const enode_b = egraph.find(self.regs.items[compare.b]);
-                        if (enode_a != enode_b) {
+                        const a = egraph.find(self.regs.items[compare.a]);
+                        const b = egraph.find(self.regs.items[compare.b]);
+                        if (a != b) {
                             try self.backtrack();
                         }
                     },
                     .yield => |regs| {
-                        self.backtrack() catch {}; // ignore result because we did our part
+                        try matches.ensureTotalCapacity(regs.len);
+
                         for (regs) |reg| {
                             try matches.append(Match{
                                 .symbol = self.program.r2v.get(reg) orelse @panic("r2v is invalid: compilation is broken"),
@@ -218,7 +228,8 @@ pub fn Machine(comptime L: type) type {
                         }
 
                         try results.append(try matches.toOwnedSlice());
-                        matches.clearRetainingCapacity();
+
+                        self.backtrack() catch return;
                     },
                 }
             }

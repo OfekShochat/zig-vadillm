@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const egg = @import("../egg.zig");
+const egg = @import("egg.zig");
 const UnionFind = egg.UnionFind;
 const Id = egg.Id;
 
@@ -235,18 +235,29 @@ test "ematching" {
 
     var pattern = Program.PatternAst{
         .enode = .{
-            .op = .{ .add = .{ 0, 1 } },
-            .children = &.{.{ .symbol = 0}, .{ .symbol = 1}},
+            .op = .sub,
+            .children = &.{ .{ .enode = .{
+                .op = .add,
+                .children = &.{ .{ .symbol = 2 }, .{ .symbol = 3 } },
+            } }, .{ .symbol = 1 } },
         },
     };
 
     var program = try Program.compileFrom(allocator, pattern);
-    var actual = machine.Machine(ToyLanguage).init(program, allocator);
+
+    var vm = machine.Machine(ToyLanguage).init(program, allocator);
+    defer vm.deinit();
+
     var results = std.ArrayList(machine.Substitution).init(allocator);
-    defer results.deinit();
-    defer actual.deinit();
+    defer {
+        for (results.items) |subs| {
+            allocator.free(subs);
+        }
+        results.deinit();
+    }
+
     defer program.deinit(allocator);
-    try actual.run(egraph, &results, root, allocator);
+    try vm.run(egraph, &results, root, allocator);
 
     std.debug.print("{any}\n", .{results.items});
 }
