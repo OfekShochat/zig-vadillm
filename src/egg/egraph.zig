@@ -67,10 +67,23 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             return @This(){
                 .union_find = UnionFind.init(allocator),
                 .eclasses = std.AutoHashMap(Id, EClass).init(allocator),
-                .memo = std.AutoHashMap(EClass, Id).init(allocator),
-                .worklist = std.ArrayList(Id).init(allocator),
+                .memo = std.AutoHashMap(L, Id).init(allocator),
+                .dirty_ids = std.ArrayList(Id).init(allocator),
+                .dirty = false,
                 .allocator = allocator,
             };
+        }
+
+        pub fn deinit(self: *@This()) void {
+            self.dirty_ids.deinit();
+            self.memo.deinit();
+            var iter = self.eclasses.valueIterator();
+            while (iter.next()) |eclass| {
+                eclass.children.deinit(self.allocator);
+                eclass.nodes.deinit(self.allocator);
+            }
+            self.eclasses.deinit();
+            self.union_find.deinit();
         }
 
         fn lookup(self: @This(), enode: *L) ?Id {
@@ -83,25 +96,27 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
         }
 
         fn addEclass(self: *@This(), first_enode: L) !Id {
-            var f_enode = first_enode;
-            if (self.lookup(&f_enode)) |existing| {
+            var enode = first_enode;
+            if (self.lookup(&enode)) |existing| {
                 return existing;
             }
 
-            const id = self.union_find.makeSet();
+            const id = try self.union_find.makeSet();
 
             var nodes = std.ArrayListUnmanaged(L){};
-            try nodes.append(self.allocator, f_enode);
+            try nodes.append(self.allocator, enode);
 
             const eclass = EClass{ .nodes = nodes, .ctx = .{} };
 
-            for (f_enode.children()) |child| {
-                var eclass_child = self.eclasses.getPtr(child) orelse @panic("a saved enode's child is invalid.");
-                try eclass_child.children.put(self.allocator, f_enode, id);
+            if (enode.children()) |children| {
+                for (children) |child| {
+                    var eclass_child = self.eclasses.getPtr(child) orelse @panic("a saved enode's child is invalid.");
+                    try eclass_child.children.put(self.allocator, enode, id);
+                }
             }
 
             try self.eclasses.put(id, eclass);
-            try self.memo.putNoClobber(f_enode, id);
+            try self.memo.putNoClobber(enode, id);
 
             // here can call a callback?
             self.dirty = true;
@@ -110,8 +125,10 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
         }
 
         pub fn canonicalize(self: @This(), enode: *L) void {
-            for (enode.children()) |*child| {
-                child.* = self.union_find.find(child.*);
+            if (enode.children()) |children| {
+                for (children) |*child| {
+                    child.* = self.union_find.find(child.*);
+                }
             }
         }
 
@@ -182,12 +199,26 @@ test "egraph" {
     std.log.err("{any}", .{poop.stuff});
 }
 
-test "ematching" {
-    const Language = union(enum) { Add: [2]egg.Id, Sub: [2]egg.Id, Const: usize, Var: egg.Id };
+const ToyLanguage = union(enum) {
+    add: [2]egg.Id,
+    sub: [2]egg.Id,
+    constant: usize,
 
-    var egraph = EGraph(Language, struct {}).init(std.testing.allocator);
-    var constid1 = try egraph.addEclass(Language{ .Const = 16 });
-    var constid2 = egraph.addEclass(Language{ .Const = 18 });
-    egraph.addEclass(Language{ .Add = .{ constid1, constid2 } });
-    std.debug.print("hello world\n");
+    fn children(self: *ToyLanguage) ?[]egg.Id {
+        return switch (self.*) {
+            .add => &self.add,
+            .sub => &self.sub,
+            else => null,
+        };
+    }
+};
+
+test "ematching" {
+    var egraph = EGraph(ToyLanguage, struct {}).init(std.testing.allocator);
+    defer egraph.deinit();
+
+    var const1 = try egraph.addEclass(.{ .constant = 16 });
+    var const2 = try egraph.addEclass(.{ .constant = 18 });
+    const add_id = try egraph.addEclass(.{ .add = .{ const1, const2 } });
+    _ = add_id;
 }

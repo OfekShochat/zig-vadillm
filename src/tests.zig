@@ -20,4 +20,5 @@ comptime {
     _ = @import("egg/egraph.zig");
     _ = @import("codegen.zig");
     _ = @import("egg/egraph.zig");
+    _ = @import("egg/machine.zig");
 }
