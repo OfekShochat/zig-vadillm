@@ -170,7 +170,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
         }
 
         pub fn find(self: @This(), id: Id) Id {
-            self.union_find.find(id);
+            return self.union_find.find(id);
         }
 
         fn rebuild(self: *@This()) void {
@@ -204,7 +204,15 @@ const ToyLanguage = union(enum) {
     sub: [2]egg.Id,
     constant: usize,
 
-    fn children(self: *ToyLanguage) ?[]egg.Id {
+    pub fn childrenConst(self: ToyLanguage) ?[]const egg.Id {
+        return switch (self) {
+            .add => self.add[0..],
+            .sub => self.sub[0..],
+            else => null,
+        };
+    }
+
+    pub fn children(self: *ToyLanguage) ?[]egg.Id {
         return switch (self.*) {
             .add => &self.add,
             .sub => &self.sub,
@@ -214,11 +222,31 @@ const ToyLanguage = union(enum) {
 };
 
 test "ematching" {
+    const allocator = std.testing.allocator;
     var egraph = EGraph(ToyLanguage, struct {}).init(std.testing.allocator);
     defer egraph.deinit();
 
     var const1 = try egraph.addEclass(.{ .constant = 16 });
     var const2 = try egraph.addEclass(.{ .constant = 18 });
-    const add_id = try egraph.addEclass(.{ .add = .{ const1, const2 } });
-    _ = add_id;
+    const root = try egraph.addEclass(.{ .add = .{ const1, const2 } });
+
+    const machine = @import("machine.zig");
+    const Program = machine.Program(ToyLanguage);
+
+    var pattern = Program.PatternAst{
+        .enode = .{
+            .op = .{ .add = .{ 0, 1 } },
+            .children = &.{.{ .symbol = 0}, .{ .symbol = 1}},
+        },
+    };
+
+    var program = try Program.compileFrom(allocator, pattern);
+    var actual = machine.Machine(ToyLanguage).init(program, allocator);
+    var results = std.ArrayList(machine.Substitution).init(allocator);
+    defer results.deinit();
+    defer actual.deinit();
+    defer program.deinit(allocator);
+    try actual.run(egraph, &results, root, allocator);
+
+    std.debug.print("{any}\n", .{results.items});
 }
