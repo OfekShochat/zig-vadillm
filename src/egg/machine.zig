@@ -2,7 +2,7 @@ const std = @import("std");
 const egg = @import("../egg.zig");
 const lisp = @import("../lisp.zig");
 
-fn Program(comptime L: type) type {
+pub fn Program(comptime L: type) type {
     return struct {
         const Instruction = union(enum) {
             bind: struct {
@@ -26,43 +26,53 @@ fn Program(comptime L: type) type {
 
         insts: []const Instruction,
 
+        pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            allocator.free(self.insts);
+        }
+
         pub fn get(self: *@This(), index: usize) ?Instruction {
             if (index >= self.insts.len) return null;
             return self.insts[index];
         }
 
-        pub fn compile(
-            r2p: std.AutoHashMap(usize, PatternAst),
-            v2r: std.AutoHashMap(usize, usize),
-            buf: std.ArrayList(Instruction),
-            next_reg: usize,
-        ) @This() {
-            _ = next_reg;
-            var hashmap_iter = r2p.valueIterator();
-            while (true) {
-                var iter = hashmap_iter.next().?;
-                var pattern_reg = iter.key;
-                var pattern = iter.value();
+        pub fn compileFrom(allocator: std.mem.Allocator, pattern: PatternAst) !@This() {
+            var r2p = std.AutoArrayHashMap(usize, PatternAst).init(allocator);
+            var v2r = std.AutoArrayHashMap(usize, usize).init(allocator);
+            defer r2p.deinit();
+            defer v2r.deinit();
 
-                switch (pattern) {
+            try r2p.put(0, pattern);
+
+            var insts = std.ArrayList(Instruction).init(allocator);
+
+            var next_reg = 1;
+            while (r2p.popOrNull()) |entry| {
+                switch (entry.value) {
                     .enode => |enode| {
                         if (enode.children.items.len == 0) {
-                            try buf.append(.{ .check = .{ .reg = pattern_reg, .enode = enode.op } });
+                            try insts.append(.{ .check = .{ .reg = entry.key, .op = enode } });
                         } else {
-                            var len = enode.children.len;
-                            try buf.append(.{ .bind = .{ .reg = pattern_reg, .enode = enode.op, .size = len } });
-                            try r2p.appendSlice(enode.children);
+                            var len = enode.children().items.len;
+                            try insts.append(.{ .bind = .{ .reg = entry.key, .op = enode, .size = len } });
+
+                            for (enode.children(), 0..) |child, i| {
+                                try r2p.put(next_reg + i, child);
+                            }
+
+                            next_reg += len;
                         }
                     },
                     .symbol => |symbol| {
                         if (v2r.get(symbol)) |reg| {
-                            try buf.append(.{ .compare = .{ .reg1 = reg, .reg2 = reg } });
+                            try insts.append(.{ .compare = .{ .a = reg, .b = entry.key } });
                         } else {
-                            try v2r.put(symbol, pattern_reg);
+                            try v2r.put(symbol, entry.key);
                         }
                     },
                 }
             }
+
+            return @This(){ .insts = insts.toOwnedSlice() };
         }
     };
 }
@@ -92,6 +102,8 @@ pub fn Machine(comptime L: type) type {
                         return node.children();
                     }
                 }
+
+                return null;
             }
         };
         const Binder = struct { out: usize, next: usize, searcher: EClassSearcher };
