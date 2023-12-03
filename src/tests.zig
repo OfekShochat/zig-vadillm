@@ -17,8 +17,5 @@ comptime {
     // submodules
     _ = @import("ir.zig");
     _ = @import("egg.zig");
-    _ = @import("egg/egraph.zig");
     _ = @import("codegen.zig");
-    _ = @import("egg/egraph.zig");
-    _ = @import("egg/machine.zig");
 }

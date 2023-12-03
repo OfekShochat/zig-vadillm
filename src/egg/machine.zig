@@ -1,8 +1,8 @@
 const std = @import("std");
-const egg = @import("egg.zig");
+const egg = @import("../egg.zig");
 
-pub const Match = struct { symbol: usize, id: egg.Id };
-pub const Substitution = []const Match;
+const Match = egg.Match;
+const Substitution = egg.Substitution;
 
 pub fn Program(comptime L: type) type {
     return struct {
@@ -108,7 +108,6 @@ pub fn Machine(comptime L: type) type {
     return struct {
         program: Program(L),
         regs: std.ArrayList(egg.Id),
-        // yield_fn: *const fn (egg.Id) void,
         stack: std.ArrayList(Binder),
         index: usize = 0,
 
@@ -121,9 +120,10 @@ pub fn Machine(comptime L: type) type {
 
             fn next(self: *EClassSearcher) ?[]const egg.Id {
                 for (self.nodes, 0..) |node, i| {
-                    if (node == self.op and node.childrenConst().?.len == self.len) {
+                    // TODO(ghostway): possible bug when len == 0
+                    if (node == self.op and node.getChildren().?.len == self.len) {
                         self.nodes = self.nodes[i + 1 ..];
-                        return node.childrenConst();
+                        return node.getChildren();
                     }
                 }
 
@@ -147,12 +147,13 @@ pub fn Machine(comptime L: type) type {
         }
 
         fn backtrack(self: *@This()) !void {
-            if (self.stack.items.len == 0) {
-                return error.StackEmpty;
-            }
-            var binder = &self.stack.items[self.stack.items.len - 1];
-
             while (true) {
+                if (self.stack.items.len == 0) {
+                    return error.StackEmpty;
+                }
+
+                var binder = &self.stack.items[self.stack.items.len - 1];
+
                 if (binder.searcher.next()) |matched| {
                     const new_len = binder.out + matched.len;
                     try self.regs.resize(new_len);
@@ -165,18 +166,36 @@ pub fn Machine(comptime L: type) type {
             }
         }
 
+        pub fn reset(self: *@This()) void {
+            self.regs.clearAndFree();
+            self.stack.clearAndFree();
+            self.index = 0;
+        }
+
+        pub fn resetRetainingCapacity(self: *@This()) void {
+            self.regs.clearRetainingCapacity();
+            self.stack.clearRetainingCapacity();
+            self.index = 0;
+        }
+
         pub fn run(
             self: *@This(),
             egraph: anytype,
-            results: *std.ArrayList(Substitution),
+            results: *egg.MatchResultsArray,
             root: egg.Id,
             allocator: std.mem.Allocator,
         ) !void {
+            self.resetRetainingCapacity();
             try self.regs.append(root);
-            return self.runInternal(egraph, allocator, results);
+            try self.runInternal(egraph, allocator, results);
         }
 
-        pub fn runInternal(self: *@This(), egraph: anytype, allocator: std.mem.Allocator, results: *std.ArrayList(Substitution)) !void {
+        pub fn runInternal(
+            self: *@This(),
+            egraph: anytype,
+            allocator: std.mem.Allocator,
+            results: *egg.MatchResultsArray,
+        ) !void {
             var matches = std.ArrayList(Match).init(allocator);
             defer matches.deinit();
 
@@ -197,24 +216,25 @@ pub fn Machine(comptime L: type) type {
                         };
 
                         try self.stack.append(binder);
-                        try self.backtrack();
+
+                        self.backtrack() catch return;
                     },
                     .check => |check| {
                         const eclass = egraph.get(self.regs.items[check.reg]).?;
 
                         for (eclass.nodes.items) |node| {
-                            if (node == check.op and node.childrenConst() == null) {
+                            if (node == check.op and node.getChildren() == null) {
                                 break;
                             }
                         } else {
-                            try self.backtrack();
+                            self.backtrack() catch return;
                         }
                     },
                     .compare => |compare| {
                         const a = egraph.find(self.regs.items[compare.a]);
                         const b = egraph.find(self.regs.items[compare.b]);
                         if (a != b) {
-                            try self.backtrack();
+                            self.backtrack() catch return;
                         }
                     },
                     .yield => |regs| {
@@ -228,7 +248,6 @@ pub fn Machine(comptime L: type) type {
                         }
 
                         try results.append(try matches.toOwnedSlice());
-
                         self.backtrack() catch return;
                     },
                 }

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const egg = @import("egg.zig");
+const egg = @import("../egg.zig");
 const UnionFind = egg.UnionFind;
 const Id = egg.Id;
 
@@ -39,7 +39,7 @@ const Id = egg.Id;
 pub fn EGraph(comptime L: type, comptime C: type) type {
     return struct {
         union_find: UnionFind,
-        eclasses: std.AutoHashMap(Id, EClass),
+        eclasses: std.AutoArrayHashMap(Id, EClass),
         memo: std.AutoHashMap(L, Id),
         dirty_ids: std.ArrayList(Id),
         dirty: bool,
@@ -57,7 +57,6 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
         };
 
         pub const EClass = struct {
-            // dude how do I not save the enode itself it feels shit
             children: std.AutoArrayHashMapUnmanaged(L, Id) = .{},
             nodes: std.ArrayListUnmanaged(L),
             ctx: C,
@@ -66,7 +65,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
         pub fn init(allocator: std.mem.Allocator) @This() {
             return @This(){
                 .union_find = UnionFind.init(allocator),
-                .eclasses = std.AutoHashMap(Id, EClass).init(allocator),
+                .eclasses = std.AutoArrayHashMap(Id, EClass).init(allocator),
                 .memo = std.AutoHashMap(L, Id).init(allocator),
                 .dirty_ids = std.ArrayList(Id).init(allocator),
                 .dirty = false,
@@ -77,8 +76,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
         pub fn deinit(self: *@This()) void {
             self.dirty_ids.deinit();
             self.memo.deinit();
-            var iter = self.eclasses.valueIterator();
-            while (iter.next()) |eclass| {
+            for (self.eclasses.values()) |*eclass| {
                 eclass.children.deinit(self.allocator);
                 eclass.nodes.deinit(self.allocator);
             }
@@ -86,16 +84,11 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             self.union_find.deinit();
         }
 
-        fn lookup(self: @This(), enode: *L) ?Id {
-            self.canonicalize(enode);
-            return self.memo.get(enode.*);
-        }
-
         pub fn get(self: @This(), id: Id) ?*EClass {
             return self.eclasses.getPtr(id);
         }
 
-        fn addEclass(self: *@This(), first_enode: L) !Id {
+        pub fn addEclass(self: *@This(), first_enode: L) !Id {
             var enode = first_enode;
             if (self.lookup(&enode)) |existing| {
                 return existing;
@@ -108,7 +101,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
             const eclass = EClass{ .nodes = nodes, .ctx = .{} };
 
-            if (enode.children()) |children| {
+            if (enode.getMutableChildren()) |children| {
                 for (children) |child| {
                     var eclass_child = self.eclasses.getPtr(child) orelse @panic("a saved enode's child is invalid.");
                     try eclass_child.children.put(self.allocator, enode, id);
@@ -124,8 +117,44 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             return id;
         }
 
-        pub fn canonicalize(self: @This(), enode: *L) void {
-            if (enode.children()) |children| {
+        pub fn saturate(self: *@This(), rewrites: []const egg.Program(L), max_iter: usize) !void {
+            var results = egg.MatchResultsArray.init(self.allocator);
+            defer results.deinit(self.allocator);
+
+            self.dirty = true;
+
+            var iters: usize = 0;
+            while (self.dirty and iters > max_iter) {
+                self.dirty = false;
+
+                for (rewrites) |rw| {
+                    self.ematch(rw.lhs, results);
+                    // use results.value.toOwnedSlice() to write individual results with the rewrite
+                }
+
+                for (results.value.items) |subst| {
+                    _ = subst;
+                    // for each rewrite, write each enode of the rhs and merge the symbols
+                    for (subst, rw.rhs) |match, rhs|  {}
+                    // add the new terms into the old
+                }
+            }
+        }
+
+        pub fn ematch(self: @This(), program: egg.Program(L), results: *egg.MatchResultsArray) void {
+            var vm = egg.Machine(L).init(program, self.allocator);
+            for (self.eclasses.keys()) |eclass| {
+                vm.run(self, results, eclass, self.allocator) catch {};
+            }
+        }
+
+        fn lookup(self: @This(), enode: *L) ?Id {
+            self.canonicalize(enode);
+            return self.memo.get(enode.*);
+        }
+
+        fn canonicalize(self: @This(), enode: *L) void {
+            if (enode.getMutableChildren()) |children| {
                 for (children) |*child| {
                     child.* = self.union_find.find(child.*);
                 }
@@ -182,82 +211,4 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             }
         }
     };
-}
-
-const Test = union(enum) {
-    stuff: [2]Id,
-};
-
-test "egraph" {
-    var poop = Test{ .stuff = .{ 1, 2 } };
-    var a = switch (poop) {
-        .stuff => |*stuff| stuff,
-    };
-
-    a[0] = 2;
-
-    std.log.err("{any}", .{poop.stuff});
-}
-
-const ToyLanguage = union(enum) {
-    add: [2]egg.Id,
-    sub: [2]egg.Id,
-    constant: usize,
-
-    pub fn childrenConst(self: ToyLanguage) ?[]const egg.Id {
-        return switch (self) {
-            .add => self.add[0..],
-            .sub => self.sub[0..],
-            else => null,
-        };
-    }
-
-    pub fn children(self: *ToyLanguage) ?[]egg.Id {
-        return switch (self.*) {
-            .add => &self.add,
-            .sub => &self.sub,
-            else => null,
-        };
-    }
-};
-
-test "ematching" {
-    const allocator = std.testing.allocator;
-    var egraph = EGraph(ToyLanguage, struct {}).init(std.testing.allocator);
-    defer egraph.deinit();
-
-    var const1 = try egraph.addEclass(.{ .constant = 16 });
-    var const2 = try egraph.addEclass(.{ .constant = 18 });
-    const root = try egraph.addEclass(.{ .add = .{ const1, const2 } });
-
-    const machine = @import("machine.zig");
-    const Program = machine.Program(ToyLanguage);
-
-    var pattern = Program.PatternAst{
-        .enode = .{
-            .op = .sub,
-            .children = &.{ .{ .enode = .{
-                .op = .add,
-                .children = &.{ .{ .symbol = 2 }, .{ .symbol = 3 } },
-            } }, .{ .symbol = 1 } },
-        },
-    };
-
-    var program = try Program.compileFrom(allocator, pattern);
-
-    var vm = machine.Machine(ToyLanguage).init(program, allocator);
-    defer vm.deinit();
-
-    var results = std.ArrayList(machine.Substitution).init(allocator);
-    defer {
-        for (results.items) |subs| {
-            allocator.free(subs);
-        }
-        results.deinit();
-    }
-
-    defer program.deinit(allocator);
-    try vm.run(egraph, &results, root, allocator);
-
-    std.debug.print("{any}\n", .{results.items});
 }
