@@ -252,12 +252,16 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
             var eclass1 = self.eclasses.getPtr(a).?;
             var eclass2 = self.eclasses.getPtr(b).?;
-            try eclass1.nodes.appendSlice(self.allocator, try eclass2.nodes.toOwnedSlice(self.allocator));
+
+            try eclass1.nodes.appendSlice(self.allocator, eclass2.nodes.items);
 
             var iter = eclass2.parents.iterator();
             while (iter.next()) |entry| {
                 try eclass1.parents.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
             }
+
+            eclass2.parents.deinit(self.allocator);
+            eclass2.nodes.deinit(self.allocator);
 
             const removed = self.eclasses.orderedRemove(b);
             std.debug.assert(removed);
@@ -309,6 +313,8 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
                 for (todo) |eclass| {
                     try self.repair(self.find(eclass));
                 }
+
+                self.allocator.free(todo);
             }
         }
     };
