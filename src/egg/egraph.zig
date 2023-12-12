@@ -1,8 +1,23 @@
 const std = @import("std");
 
 const egg = @import("../egg.zig");
+const machine = @import("machine.zig");
 const UnionFind = egg.UnionFind;
-const Id = egg.Id;
+
+pub fn Rewrite(comptime L: type) type {
+    return struct {
+        pub const Program = egg.Program(L);
+        const LT = @typeInfo(L).Union.tag_type.?;
+
+        pub const AstNode = union(enum) {
+            enode: L,
+            symbol: usize,
+        };
+
+        program: Program,
+        subst_ast: []const AstNode,
+    };
+}
 
 /// An Egraph representation.
 ///
@@ -38,6 +53,8 @@ const Id = egg.Id;
 /// ```
 pub fn EGraph(comptime L: type, comptime C: type) type {
     return struct {
+        const Id = egg.Id;
+
         union_find: UnionFind,
         eclasses: std.AutoArrayHashMap(Id, EClass),
         memo: std.AutoHashMap(L, Id),
@@ -57,7 +74,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
         };
 
         pub const EClass = struct {
-            children: std.AutoArrayHashMapUnmanaged(L, Id) = .{},
+            parents: std.AutoArrayHashMapUnmanaged(L, Id) = .{},
             nodes: std.ArrayListUnmanaged(L),
             ctx: C,
         };
@@ -77,7 +94,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             self.dirty_ids.deinit();
             self.memo.deinit();
             for (self.eclasses.values()) |*eclass| {
-                eclass.children.deinit(self.allocator);
+                eclass.parents.deinit(self.allocator);
                 eclass.nodes.deinit(self.allocator);
             }
             self.eclasses.deinit();
@@ -104,7 +121,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             if (enode.getMutableChildren()) |children| {
                 for (children) |child| {
                     var eclass_child = self.eclasses.getPtr(child) orelse @panic("a saved enode's child is invalid.");
-                    try eclass_child.children.put(self.allocator, enode, id);
+                    try eclass_child.parents.put(self.allocator, enode, id);
                 }
             }
 
@@ -117,96 +134,180 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             return id;
         }
 
-        pub fn saturate(self: *@This(), rewrites: []const egg.Program(L), max_iter: usize) !void {
-            var results = egg.MatchResultsArray.init(self.allocator);
-            defer results.deinit(self.allocator);
+        const RewriteMatches = struct {
+            subst_ast: []const Rewrite(L).AstNode,
+            matches: []machine.MatchResult,
+        };
+
+        pub fn saturate(self: *@This(), rewrites: []const Rewrite(L), max_iter: usize) !void {
+            var results = std.ArrayList(RewriteMatches).init(self.allocator);
+            defer results.deinit();
 
             self.dirty = true;
 
             var iters: usize = 0;
-            while (self.dirty and iters > max_iter) {
+            while (self.dirty and iters < max_iter) : (iters += 1) {
                 self.dirty = false;
 
                 for (rewrites) |rw| {
-                    self.ematch(rw.lhs, results);
-                    // use results.value.toOwnedSlice() to write individual results with the rewrite
+                    try results.append(.{
+                        .subst_ast = rw.subst_ast,
+                        .matches = try self.ematch(rw.program),
+                    });
                 }
 
-                for (results.value.items) |subst| {
-                    _ = subst;
-                    // for each rewrite, write each enode of the rhs and merge the symbols
-                    for (subst, rw.rhs) |match, rhs|  {}
-                    // add the new terms into the old
+                for (results.items) |rw_res| {
+                    for (rw_res.matches) |match| {
+                        try self.applyRewriteMatches(match.root, rw_res.subst_ast, match.matches);
+                    }
                 }
+
+                for (results.items) |*res| {
+                    for (res.matches) |*match_result| {
+                        match_result.matches.deinit();
+                    }
+                    self.allocator.free(res.matches);
+                }
+
+                results.clearAndFree();
+                try self.rebuild();
             }
         }
 
-        pub fn ematch(self: @This(), program: egg.Program(L), results: *egg.MatchResultsArray) void {
-            var vm = egg.Machine(L).init(program, self.allocator);
+        /// subst_ast has to be in postorder, symbols first.
+        fn applyRewriteMatches(
+            self: *@This(),
+            root: Id,
+            subst_ast: []const Rewrite(L).AstNode,
+            matches: std.AutoHashMap(usize, Id),
+        ) !void {
+            // maps a child index of the ast to an Id in the egraph
+            var ids = std.ArrayList(Id).init(self.allocator);
+            defer ids.deinit();
+
+            try ids.appendNTimes(0, subst_ast.len);
+
+            for (subst_ast, 0..) |node, i| {
+                switch (node) {
+                    .enode => |enode| {
+                        if (enode.getChildren()) |ast_children| {
+                            var copied = enode;
+
+                            // for each child, map its id to the actual egraph id
+                            for (copied.getMutableChildren().?, ast_children) |*child, ast_id| {
+                                child.* = ids.items[ast_id];
+                            }
+
+                            ids.items[i] = try self.addEclass(copied);
+                        } else {
+                            // ground term, add it to the graph and the ids
+                            ids.items[i] = try self.addEclass(enode);
+                        }
+                    },
+                    .symbol => |symbol| {
+                        ids.items[i] = matches.get(symbol).?;
+                    },
+                }
+            }
+
+            _ = try self.merge(root, ids.items[ids.items.len - 1]);
+        }
+
+        pub fn ematch(self: @This(), program: egg.Program(L)) ![]machine.MatchResult {
+            var results = std.ArrayList(machine.MatchResult).init(self.allocator);
+
+            var vm = machine.Machine(L).init(program, self.allocator);
+            defer vm.deinit();
+
             for (self.eclasses.keys()) |eclass| {
-                vm.run(self, results, eclass, self.allocator) catch {};
+                try vm.run(self, &results, eclass, self.allocator);
             }
+
+            return @constCast(try results.toOwnedSlice());
         }
 
+        /// updates enode in-place
         fn lookup(self: @This(), enode: *L) ?Id {
             self.canonicalize(enode);
             return self.memo.get(enode.*);
         }
 
+        /// updates enode in-place
         fn canonicalize(self: @This(), enode: *L) void {
             if (enode.getMutableChildren()) |children| {
                 for (children) |*child| {
-                    child.* = self.union_find.find(child.*);
+                    child.* = self.find(child.*);
                 }
             }
         }
 
         fn merge(self: *@This(), a: Id, b: Id) !Id {
-            if (self.union_find.find(a) == self.union_find.find(b)) {
-                return self.union_find.find(a);
+            if (self.find(a) == self.find(b)) {
+                return self.find(a);
             }
 
-            const new_id = self.union_find.merge(a, b);
-            try self.dirty_ids.append(new_id);
+            _ = self.union_find.merge(a, b);
+            try self.dirty_ids.append(a); // submit a pending enode to repair
 
-            return new_id;
-        }
 
-        fn repair(self: *@This(), eclass_id: Id) void {
-            var eclass = self.eclasses.getPtr(eclass_id).?;
-            for (eclass.children.items) |parent| {
-                std.debug.assert(self.memo.remove(parent.enode));
-                self.canonicalize(&parent.enode);
+            var eclass1 = self.eclasses.getPtr(a).?;
+            var eclass2 = self.eclasses.getPtr(b).?;
+            try eclass1.nodes.appendSlice(self.allocator, try eclass2.nodes.toOwnedSlice(self.allocator));
 
-                try self.memo.putNoClobber(
-                    parent.enode,
-                    self.union_find.find(parent.eclass_id),
-                );
+            var iter = eclass2.parents.iterator();
+            while (iter.next()) |entry| {
+                try eclass1.parents.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
             }
 
-            var visited_children = std.AutoArrayHashMap(L, Id).init(self.allocator);
+            const removed = self.eclasses.orderedRemove(b);
+            std.debug.assert(removed);
 
-            for (eclass.children.items) |parent| {
-                if (visited_children.contains(parent.enode)) {
-                    try self.merge(parent.eclass_id, visited_children.get(parent.enode));
-                }
-
-                try visited_children.put(parent.enode, self.union_find.find(parent.eclass_id));
-            }
-
-            eclass.children.deinit();
-            eclass.children = visited_children.unmanaged;
+            return a;
         }
 
         pub fn find(self: @This(), id: Id) Id {
             return self.union_find.find(id);
         }
 
-        fn rebuild(self: *@This()) void {
+        fn repair(self: *@This(), eclass_id: Id) !void {
+            var eclass = self.eclasses.getPtr(eclass_id).?;
+
+            var iter = eclass.parents.iterator();
+            while (iter.next()) |entry| {
+                var parent = entry.key_ptr;
+
+                std.debug.assert(self.memo.remove(parent.*));
+                self.canonicalize(parent);
+
+                try self.memo.putNoClobber(
+                    parent.*,
+                    self.find(entry.value_ptr.*),
+                );
+            }
+
+            var visited_parents = std.AutoArrayHashMap(L, Id).init(self.allocator);
+
+            iter = eclass.parents.iterator();
+            while (iter.next()) |entry| {
+                var parent = entry.key_ptr;
+                self.canonicalize(parent);
+
+                if (visited_parents.get(parent.*)) |visited_parent| {
+                    _ = try self.merge(entry.value_ptr.*, visited_parent);
+                }
+
+                try visited_parents.put(parent.*, self.find(entry.value_ptr.*));
+            }
+
+            eclass.parents.deinit(self.allocator);
+            eclass.parents = visited_parents.unmanaged;
+        }
+
+        fn rebuild(self: *@This()) !void {
             while (self.dirty_ids.items.len > 0) {
                 var todo = try self.dirty_ids.toOwnedSlice();
                 for (todo) |eclass| {
-                    self.repair(self.union_find.find(eclass));
+                    try self.repair(self.find(eclass));
                 }
             }
         }

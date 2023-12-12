@@ -1,8 +1,10 @@
 const std = @import("std");
 const egg = @import("../egg.zig");
 
-const Match = egg.Match;
-const Substitution = egg.Substitution;
+pub const MatchResult = struct {
+    root: egg.Id,
+    matches: std.AutoHashMap(usize, egg.Id),
+};
 
 pub fn Program(comptime L: type) type {
     return struct {
@@ -24,7 +26,7 @@ pub fn Program(comptime L: type) type {
         };
 
         pub const PatternAst = union(enum) {
-            enode: struct { op: LT, children: ?[]const PatternAst },
+            enode: struct { op: LT, children: []const PatternAst },
             symbol: usize,
         };
 
@@ -55,19 +57,19 @@ pub fn Program(comptime L: type) type {
             while (r2p.popOrNull()) |entry| {
                 switch (entry.value) {
                     .enode => |enode| {
-                        if (enode.children) |children| {
+                        if (enode.children.len != 0) {
                             try insts.append(.{ .bind = .{
                                 .reg = entry.key,
                                 .op = enode.op,
-                                .len = children.len,
+                                .len = enode.children.len,
                                 .out_reg = next_reg,
                             } });
 
-                            for (children, 0..) |child, i| {
+                            for (enode.children, 0..) |child, i| {
                                 try r2p.put(next_reg + i, child);
                             }
 
-                            next_reg += children.len;
+                            next_reg += enode.children.len;
                         } else {
                             try insts.append(.{ .check = .{ .reg = entry.key, .op = enode.op } });
                         }
@@ -181,24 +183,23 @@ pub fn Machine(comptime L: type) type {
         pub fn run(
             self: *@This(),
             egraph: anytype,
-            results: *egg.MatchResultsArray,
+            results: *std.ArrayList(MatchResult),
             root: egg.Id,
             allocator: std.mem.Allocator,
         ) !void {
             self.resetRetainingCapacity();
+
             try self.regs.append(root);
-            try self.runInternal(egraph, allocator, results);
+            try self.runInternal(egraph, allocator, results, root);
         }
 
         pub fn runInternal(
             self: *@This(),
             egraph: anytype,
             allocator: std.mem.Allocator,
-            results: *egg.MatchResultsArray,
+            results: *std.ArrayList(MatchResult),
+            root: egg.Id,
         ) !void {
-            var matches = std.ArrayList(Match).init(allocator);
-            defer matches.deinit();
-
             while (self.program.get(self.index)) |inst| {
                 self.index += 1;
 
@@ -238,16 +239,17 @@ pub fn Machine(comptime L: type) type {
                         }
                     },
                     .yield => |regs| {
-                        try matches.ensureTotalCapacity(regs.len);
+                        var matches = std.AutoHashMap(usize, egg.Id).init(allocator);
 
                         for (regs) |reg| {
-                            try matches.append(Match{
-                                .symbol = self.program.r2v.get(reg) orelse @panic("r2v is invalid: compilation is broken"),
-                                .id = self.regs.items[reg],
-                            });
+                            try matches.put(
+                                self.program.r2v.get(reg) orelse @panic("r2v is invalid: compilation is broken"),
+                                self.regs.items[reg],
+                            );
                         }
 
-                        try results.append(try matches.toOwnedSlice());
+                        try results.append(MatchResult{ .root = root, .matches = matches });
+
                         self.backtrack() catch return;
                     },
                 }
