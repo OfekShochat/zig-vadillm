@@ -1,12 +1,12 @@
 const std = @import("std");
 
-pub const UnionFind = @import("egg/UnionFind.zig");
-pub const EGraph = @import("egg/egraph.zig").EGraph;
-pub const Machine = @import("egg/machine.zig").Machine;
-pub const Program = @import("egg/machine.zig").Program;
+pub const UnionFind = @import("UnionFind.zig");
+pub const EGraph = @import("egraph.zig").EGraph;
+pub const Machine = @import("machine.zig").Machine;
+pub const Program = @import("machine.zig").Program;
 
 comptime {
-    _ = @import("egg/tests.zig");
+    _ = @import("tests.zig");
 }
 
 pub const Id = u32;
@@ -27,8 +27,6 @@ pub const MatchResultsArray = struct {
         for (self.value.items) |subs| {
             allocator.free(subs);
         }
-
-        self.results.deinit();
     }
 
     pub fn append(self: *MatchResultsArray, subs: Substitution) !void {
