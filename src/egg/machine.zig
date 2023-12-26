@@ -21,6 +21,7 @@ pub fn Program(comptime LN: type) type {
             var v2r = std.AutoArrayHashMap(usize, usize).init(std.testing.allocator);
             var insts = std.ArrayList(Instruction).init(std.testing.allocator);
             defer r2p.deinit();
+            defer v2r.deinit();
 
             var next_reg: usize = 1;
             try r2p.put(0, pattern);

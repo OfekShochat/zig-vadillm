@@ -59,7 +59,9 @@ test "(add a a)" {
         //vm.run(egraph, &results, eclass, allocator) catch {};
         std.log.warn("\neclass id: {}\n", .{eclass});
         var a = try vm.run(1, egraph);
-        _ = a;
+        if (a == true) {
+            std.log.warn("result: success", .{});
+        }
     }
 
     std.debug.print("results: {any}\n", .{results.value.items});
