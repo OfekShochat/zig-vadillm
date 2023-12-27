@@ -14,6 +14,11 @@ pub fn Program(comptime LN: type) type {
             Symbol: usize,
         };
 
+        pub fn deinit(self: *@This()) void {
+            self.r2v.deinit();
+            std.testing.allocator.free(self.insts);
+        }
+
         pub const Instruction = union(enum) { Bind: struct { reg: usize, op: LT, child_len: usize, out_reg: usize }, Check: struct { reg: usize, op: LT }, Compare: struct { reg1: usize, reg2: usize }, Yield: usize };
 
         pub fn compile(pattern: patternAst) !@This() {
@@ -21,7 +26,7 @@ pub fn Program(comptime LN: type) type {
             var v2r = std.AutoArrayHashMap(usize, usize).init(std.testing.allocator);
             var insts = std.ArrayList(Instruction).init(std.testing.allocator);
             defer r2p.deinit();
-            defer v2r.deinit();
+            defer insts.deinit();
 
             var next_reg: usize = 1;
             try r2p.put(0, pattern);
@@ -133,6 +138,12 @@ pub fn Machine(comptime LN: type) type {
                 .regs = std.ArrayList(egg.Id).init(std.testing.allocator),
                 .b_stack = std.ArrayList(Binder).init(std.testing.allocator),
             };
+        }
+
+        pub fn deinit(self: *@This()) void {
+            self.program.deinit();
+            self.regs.deinit();
+            self.b_stack.deinit();
         }
 
         pub fn backtrack(self: *@This()) !void {

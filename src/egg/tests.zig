@@ -48,6 +48,7 @@ test "(add a a)" {
     var program = try Program.compile(pattern);
 
     var vm = egg.Machine(ToyLanguage).init(program);
+    defer vm.deinit();
     // defer vm.deinit();
 
     var results = egg.MatchResultsArray.init(allocator);
