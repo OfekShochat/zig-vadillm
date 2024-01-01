@@ -148,27 +148,31 @@ pub fn Machine(comptime LN: type) type {
 
         pub fn backtrack(self: *@This()) !void {
             while (true) {
-                std.log.warn("\nbacktracking\n", .{});
+                // std.log.warn("\nbacktracking\n", .{});
                 if (self.b_stack.items.len == 0) {
-                    return;
+                    std.log.warn("b_stack empty", .{});
+                    return error.StackEmpty;
                 }
 
                 var binder = self.b_stack.items[self.b_stack.items.len - 1];
                 //var backtrack1 = binder.searcher.next().?;
                 //std.log.warn("backtrack regs: {} {}", .{ backtrack1[0], backtrack1[1] });
                 if (binder.searcher.next()) |backtrack_entry| {
-                    var new_len = backtrack_entry.len + binder.out_reg;
+                    var new_len = backtrack_entry.len + binder.next_reg;
                     try self.regs.resize(new_len);
                     std.log.warn("regs: {} {}", .{ backtrack_entry[0], backtrack_entry[1] });
-                    @memcpy(self.regs.items[binder.out_reg..new_len], backtrack_entry);
-                    std.log.warn("\nbacktracking: {} {} {}\n", .{ new_len, self.regs.items[0], self.regs.items[1] });
+                    std.log.warn("\nbacktracking: {}\n", .{backtrack_entry.len});
+                    @memcpy(self.regs.items[binder.next_reg..new_len], backtrack_entry);
+                    break;
+                } else {
+                    std.log.warn("next didn't worked\n", .{});
+                    _ = self.b_stack.popOrNull() orelse return error.StackEmpty;
                 }
-
-                _ = self.b_stack.popOrNull();
             }
         }
 
         pub fn run(self: *@This(), _eclass: egg.Id, egraph: anytype) !bool {
+            try self.regs.append(_eclass);
             var inst_idx: u32 = 0;
             while (true) {
                 var inst = try self.program.get_instruction(inst_idx);
@@ -177,10 +181,10 @@ pub fn Machine(comptime LN: type) type {
                         try self.b_stack.append(Binder{ .out_reg = bind.reg, .next_reg = bind.out_reg, .searcher = EClassSearcher{
                             .op = bind.op,
                             .len = bind.child_len,
-                            .nodes = egraph.get(_eclass).?.nodes.items,
+                            .nodes = egraph.get(self.regs.items[bind.reg]).?.nodes.items,
                         } });
                         std.log.warn("\nbinder: {} {} {}\n", .{ self.b_stack.items[0].searcher.nodes.len, self.b_stack.items[0].searcher.op, self.b_stack.items[0].searcher.nodes[0] });
-                        try self.backtrack();
+                        self.backtrack() catch return false;
                     },
                     .Check => |check| {
                         var id = self.regs.items[check.reg];
@@ -195,8 +199,8 @@ pub fn Machine(comptime LN: type) type {
                     },
 
                     .Compare => |compare| {
-                        var a = egraph.find(self.regs.items[compare.reg1 - 1]);
-                        var b = egraph.find(self.regs.items[compare.reg2 - 1]);
+                        var a = egraph.find(self.regs.items[compare.reg1]);
+                        var b = egraph.find(self.regs.items[compare.reg2]);
                         if (a != b) {
                             try self.backtrack();
                         }
