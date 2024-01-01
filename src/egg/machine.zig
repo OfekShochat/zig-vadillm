@@ -19,14 +19,16 @@ pub fn Program(comptime LN: type) type {
             std.testing.allocator.free(self.insts);
         }
 
-        pub const Instruction = union(enum) { Bind: struct { reg: usize, op: LT, child_len: usize, out_reg: usize }, Check: struct { reg: usize, op: LT }, Compare: struct { reg1: usize, reg2: usize }, Yield: usize };
+        pub const Instruction = union(enum) { Bind: struct { reg: usize, op: LT, child_len: usize, out_reg: usize }, Check: struct { reg: usize, op: LT }, Compare: struct { reg1: usize, reg2: usize }, Yield: []const usize };
 
         pub fn compile(pattern: patternAst) !@This() {
             var r2p = std.AutoArrayHashMap(usize, patternAst).init(std.testing.allocator);
             var v2r = std.AutoArrayHashMap(usize, usize).init(std.testing.allocator);
+            var r2v = std.AutoArrayHashMap(usize, usize).init(std.testing.allocator);
             var insts = std.ArrayList(Instruction).init(std.testing.allocator);
             defer r2p.deinit();
             defer insts.deinit();
+            defer v2r.deinit();
 
             var next_reg: usize = 1;
             try r2p.put(0, pattern);
@@ -75,17 +77,20 @@ pub fn Program(comptime LN: type) type {
                 }
             }
 
-            try insts.append(Instruction{
-                .Yield = 1,
-            });
+            try insts.append(Instruction{ .Yield = v2r.values() });
 
             for (insts.items) |inst| {
                 std.log.warn("instruction: {}", .{inst});
             }
 
+            var v2r_iter = v2r.iterator();
+            while (v2r_iter.next()) |entry| {
+                try r2v.put(entry.value_ptr.*, entry.key_ptr.*);
+            }
+
             return @This(){
                 .insts = try insts.toOwnedSlice(),
-                .r2v = v2r,
+                .r2v = r2v,
             };
         }
 
@@ -171,7 +176,7 @@ pub fn Machine(comptime LN: type) type {
             }
         }
 
-        pub fn run(self: *@This(), _eclass: egg.Id, egraph: anytype) !bool {
+        pub fn run(self: *@This(), results: *std.AutoArrayHashMap(usize, usize), _eclass: egg.Id, egraph: anytype) !bool {
             try self.regs.append(_eclass);
             var inst_idx: u32 = 0;
             while (true) {
@@ -207,7 +212,12 @@ pub fn Machine(comptime LN: type) type {
                     },
 
                     .Yield => |yield| {
-                        _ = yield;
+                        var matches = std.AutoArrayHashMap(usize, usize).init(std.testing.allocator);
+                        for (yield) |val| {
+                            try matches.put(self.regs.items[val], val);
+                        }
+
+                        results.* = matches;
                         return true;
                     },
                 }

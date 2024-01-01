@@ -59,10 +59,12 @@ test "(add a a)" {
     for (egraph.eclasses.keys()) |eclass| {
         //vm.run(egraph, &results, eclass, allocator) catch {};
         std.log.warn("\neclass id: {}\n", .{eclass});
-        var a = try vm.run(eclass, egraph);
+        var result = std.AutoArrayHashMap(usize, usize).init(std.testing.allocator);
+        var a = try vm.run(&results, eclass, egraph);
         if (a == true) {
             std.log.warn("result: success", .{});
         }
+        std.debug.print("results: {}\n", .{result.values.items});
     }
 
     std.debug.print("results: {any}\n", .{results.value.items});
