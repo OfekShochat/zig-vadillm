@@ -29,6 +29,7 @@ const ToyLanguage = union(enum) {
 
 test "(add a a)" {
     const allocator = std.testing.allocator;
+    _ = allocator;
     var egraph = egg.EGraph(ToyLanguage, struct {}).init(std.testing.allocator);
     defer egraph.deinit();
 
@@ -51,7 +52,7 @@ test "(add a a)" {
     defer vm.deinit();
     // defer vm.deinit();
 
-    var results = egg.MatchResultsArray.init(allocator);
+    //var results = egg.MatchResultsArray.init(allocator);
     // defer results.deinit(allocator);
 
     //defer program.deinit(allocator);
@@ -60,12 +61,12 @@ test "(add a a)" {
         //vm.run(egraph, &results, eclass, allocator) catch {};
         std.log.warn("\neclass id: {}\n", .{eclass});
         var result = std.AutoArrayHashMap(usize, usize).init(std.testing.allocator);
-        var a = try vm.run(&results, eclass, egraph);
+        var a = try vm.run(&result, 1, egraph);
         if (a == true) {
             std.log.warn("result: success", .{});
         }
-        std.debug.print("results: {}\n", .{result.values.items});
+        std.debug.print("results: {}\n", .{result.values().len});
     }
 
-    std.debug.print("results: {any}\n", .{results.value.items});
+    //std.debug.print("results: {any}\n", .{results.value.items});
 }

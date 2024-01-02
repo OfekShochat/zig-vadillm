@@ -213,6 +213,7 @@ pub fn Machine(comptime LN: type) type {
 
                     .Yield => |yield| {
                         var matches = std.AutoArrayHashMap(usize, usize).init(std.testing.allocator);
+                        std.log.warn("match: {}", .{yield[0]});
                         for (yield) |val| {
                             try matches.put(self.regs.items[val], val);
                         }
