@@ -38,12 +38,14 @@ const AllocatedLiveRange = struct {
 allocations: std.ArrayList(AllocatedLiveRange),
 active: std.ArrayList(PhysAllocatedLiveRange),
 inactive: std.ArrayList(PhysAllocatedLiveRange),
+unhandled: std.ArrayList(LiveRange),
 
 pub fn init(allocator: std.mem.Allocator) LinearScanAllocator {
     return LinearScanAllocator{
         .allocations = std.ArrayList(AllocatedLiveRange).init(allocator),
         .active = std.ArrayList(PhysAllocatedLiveRange).init(allocator),
         .inactive = std.ArrayList(PhysAllocatedLiveRange).init(allocator),
+        .unhandled = std.ArrayList(LiveRange).init(allocator),
     };
 }
 
@@ -51,12 +53,14 @@ pub fn deinit(self: *LinearScanAllocator) void {
     self.allocations.deinit();
     self.active.deinit();
     self.inactive.deinit();
+    // self.unhandled.deinit();
 }
 
 pub fn reset(self: *LinearScanAllocator) void {
-    self.allocations.clearAndFree();
-    self.active.clearAndFree();
-    self.inactive.clearAndFree();
+    self.allocations.clearRetainingCapacity();
+    self.active.clearRetainingCapacity();
+    self.inactive.clearRetainingCapacity();
+    self.unhandled.clearRetainingCapacity();
 }
 
 // Ranges have to be within block boundaries.
@@ -64,31 +68,47 @@ fn rangesIntersect(a: LiveRange, b: LiveRange) bool {
     return (a.start >= b.start and a.start <= b.end) or (b.start >= a.start and b.start <= a.end);
 }
 
+// `intervals` has to be ordered by liverange's start
 pub fn run(
     self: *LinearScanAllocator,
     allocator: std.mem.Allocator,
     intervals: []const LiveRange,
     abi: Abi,
 ) !void {
-    for (intervals, 0..) |current, i| {
-        for (self.active.items, 0..) |interval, idx| {
-            // note this is inclusive
+    self.unhandled = std.ArrayList(LiveRange).fromOwnedSlice(allocator, @constCast(intervals));
+    std.mem.reverse(LiveRange, self.unhandled.items);
+
+    while (self.unhandled.popOrNull()) |current| {
+        std.debug.print("{any} {}\n", .{ self.unhandled.items, current });
+        var idx: usize = 0;
+        for (self.active.items) |interval| {
             if (interval.live_range.end < current.start) {
                 // remove interval from active
-                _ = self.active.orderedRemove(idx);
-            } else if (!rangesIntersect(interval.live_range, current)) {
-                // move from active to inactive
-                try self.inactive.append(self.active.orderedRemove(idx));
+                const done = self.active.orderedRemove(idx);
+                try self.allocations.append(AllocatedLiveRange{
+                    .live_range = done.live_range,
+                    .allocation = .{ .preg = done.preg },
+                });
+            }
+            //else if (!rangesIntersect(interval.live_range, current)) {
+            // FIXME: this is if I make intervals that are not continuous
+            // move from active to inactive
+            //    try self.inactive.append(self.active.orderedRemove(idx));
+            else {
+                idx += 1;
             }
         }
 
-        for (self.inactive.items, 0..) |interval, idx| {
+        idx = 0;
+        for (self.inactive.items) |interval| {
             if (interval.live_range.end < current.start) {
                 // remove from inactive
                 _ = self.inactive.orderedRemove(idx);
             } else if (rangesIntersect(interval.live_range, current)) {
                 // move from inactive to active
                 try self.active.append(self.inactive.orderedRemove(idx));
+            } else {
+                idx += 1;
             }
         }
 
@@ -118,11 +138,14 @@ pub fn run(
             else => {},
         }
 
-        // std.debug.print("active at {} {any}\n\n", .{ i, self.active.items });
+        try self.assignAllocateRegOrStack(allocator, current, abi);
+    }
 
-        try self.assignAllocateRegOrStack(allocator, current, abi, intervals[i + 1 ..]);
-
-        // std.debug.print("active at {} {any}\n\n", .{ i, self.active.items });
+    for (self.active.items) |interval| {
+        try self.allocations.append(AllocatedLiveRange{
+            .live_range = interval.live_range,
+            .allocation = .{ .preg = interval.preg },
+        });
     }
 }
 
@@ -131,7 +154,6 @@ pub fn assignAllocateRegOrStack(
     allocator: std.mem.Allocator,
     current: LiveRange,
     abi: Abi,
-    unhandled: []const LiveRange,
 ) !void {
     var free_until = std.AutoArrayHashMap(PhysicalReg, usize).init(allocator);
     defer free_until.deinit();
@@ -148,7 +170,7 @@ pub fn assignAllocateRegOrStack(
 
     // zero if active
     for (self.active.items) |interval| {
-        std.debug.print("{} active at the same time as {}\n", .{ interval, current });
+        // std.debug.print("{} active at the same time as {}\n", .{ interval, current });
         try free_until.put(interval.preg, 0);
     }
 
@@ -160,7 +182,7 @@ pub fn assignAllocateRegOrStack(
     }
 
     // add the intersection with fixed-reg ranges.
-    for (unhandled) |interval| {
+    for (self.unhandled.items) |interval| {
         if (interval.vreg.class == current.vreg.class and rangesIntersect(interval, current)) {
             switch (interval.constraints) {
                 .fixed_reg => |preg| try free_until.put(preg, @max(interval.start, current.start)),
@@ -182,21 +204,16 @@ pub fn assignAllocateRegOrStack(
     if (current.end < max_free) {
         // reg's next live section is after current's,
         // we can allocate a reg for the whole interval.
-        try self.active.append(PhysAllocatedLiveRange{
+        return self.active.append(PhysAllocatedLiveRange{
             .live_range = current,
             .preg = found,
-        });
-
-        return self.allocations.append(AllocatedLiveRange{
-            .live_range = current,
-            .allocation = .{ .preg = found },
         });
     }
 
     try self.allocations.append(AllocatedLiveRange{
         .live_range = .{
             .start = current.start,
-            .end = max_free, // this is inclusive or exclusive
+            .end = max_free,
             .vreg = current.vreg,
             .constraints = current.constraints,
         },
@@ -204,16 +221,34 @@ pub fn assignAllocateRegOrStack(
     });
 
     const after_split = LiveRange{
-        .start = max_free, // this means exclusive
+        .start = max_free + 1,
         .end = current.end,
         .vreg = current.vreg,
         .constraints = current.constraints,
     };
 
-    try self.active.append(PhysAllocatedLiveRange{
-        .live_range = after_split,
-        .preg = found,
-    });
+    try self.insertToUnhandled(after_split);
+}
+
+fn insertToUnhandled(self: *LinearScanAllocator, live_range: LiveRange) !void {
+    std.debug.print("\n\nwtf\n\n", .{});
+    // wouldn't this always go to 0?
+    var min: usize = 0;
+    var max: usize = self.unhandled.items.len;
+
+    while (min <= max) {
+        const mid = (min + max) / 2;
+        if (mid < live_range.start) {
+            min = mid + 1;
+        } else if (mid > live_range.start) {
+            max = mid - 1;
+        } else {
+            break;
+        }
+    }
+
+    std.debug.print("\n\nwtf {}\n\n", .{min + max});
+    try self.unhandled.insert((min + max) / 2, live_range);
 }
 
 /// requires a and b to intersect; otherwise, the output is wrong.
@@ -289,7 +324,7 @@ test "poop" {
                 .constraints = .none,
             },
             LiveRange{
-                .start = 1,
+                .start = 2,
                 .end = 5,
                 .vreg = VirtualReg{ .class = .int, .index = 2 },
                 .constraints = .none,
@@ -311,53 +346,62 @@ test "poop" {
         },
     );
 
+    std.debug.print("\n\n", .{});
     for (regalloc.allocations.items) |allocation| {
         std.debug.print("{any}\n\n", .{allocation});
     }
 
-    regalloc.reset();
+    std.debug.print("\n\n", .{});
 
-    try regalloc.run(
-        allocator,
-        &.{
-            LiveRange{
-                .start = 0,
-                .end = 3,
-                .vreg = VirtualReg{ .class = .float, .index = 0 },
-                .constraints = .none,
-            },
-            LiveRange{
-                .start = 1,
-                .end = 5,
-                .vreg = VirtualReg{ .class = .int, .index = 2 },
-                .constraints = .none,
-            },
-            LiveRange{
-                .start = 2,
-                .end = 10,
-                .vreg = VirtualReg{ .class = .int, .index = 1 },
-                .constraints = .none,
-            },
-            LiveRange{
-                .start = 2,
-                .end = 5,
-                .vreg = VirtualReg{ .class = .float, .index = 1 },
-                .constraints = .none,
-            },
-        },
-        Abi{
-            .int_pregs = &.{
-                PhysicalReg{ .class = .int, .encoding = 0 },
-                PhysicalReg{ .class = .int, .encoding = 1 },
-            },
-            .float_pregs = &.{
-                PhysicalReg{ .class = .float, .encoding = 0 },
-            },
-            .vector_pregs = &.{},
-        },
-    );
+    // regalloc.reset();
 
-    for (regalloc.allocations.items) |allocation| {
-        std.debug.print("{any}\n\n", .{allocation});
-    }
+    // try regalloc.run(
+    //     allocator,
+    //     &.{
+    //         LiveRange{
+    //             .start = 0,
+    //             .end = 3,
+    //             .vreg = VirtualReg{ .class = .float, .index = 0 },
+    //             .constraints = .none,
+    //         },
+    //         LiveRange{
+    //             .start = 2,
+    //             .end = 5,
+    //             .vreg = VirtualReg{ .class = .int, .index = 2 },
+    //             .constraints = .none,
+    //         },
+    //         LiveRange{
+    //             .start = 2,
+    //             .end = 10,
+    //             .vreg = VirtualReg{ .class = .int, .index = 1 },
+    //             .constraints = .none,
+    //         },
+    //         LiveRange{
+    //             .start = 2,
+    //             .end = 5,
+    //             .vreg = VirtualReg{ .class = .float, .index = 1 },
+    //             .constraints = .none,
+    //         },
+    //         LiveRange{
+    //             .start = 9,
+    //             .end = 20,
+    //             .vreg = VirtualReg{ .class = .int, .index = 10 },
+    //             .constraints = .none,
+    //         },
+    //     },
+    //     Abi{
+    //         .int_pregs = &.{
+    //             PhysicalReg{ .class = .int, .encoding = 0 },
+    //             // PhysicalReg{ .class = .int, .encoding = 1 },
+    //         },
+    //         .float_pregs = &.{
+    //             PhysicalReg{ .class = .float, .encoding = 0 },
+    //         },
+    //         .vector_pregs = &.{},
+    //     },
+    // );
+
+    // for (regalloc.allocations.items) |allocation| {
+    //     std.debug.print("{any}\n\n", .{allocation});
+    // }
 }
