@@ -127,25 +127,8 @@ pub fn get(self: ControlFlowGraph, block_ref: Index) ?*const CFGNode {
     return self.nodes.getPtr(block_ref);
 }
 
-pub const POIterator = struct {
-    idx: usize,
-    cfg: *const ControlFlowGraph,
-
-    pub fn next(self: *POIterator) ?Index {
-        if (self.idx > 0) {
-            self.idx -= 1;
-            return self.cfg.rpo.items[self.idx];
-        }
-
-        return null;
-    }
-};
-
-pub fn postorderIter(self: *const ControlFlowGraph) POIterator {
-    return POIterator{
-        .idx = self.rpo.items.len,
-        .cfg = self,
-    };
+pub fn postorderIter(self: *const ControlFlowGraph) std.mem.ReverseIterator(Index) {
+    return std.mem.reverseIterator(self.rpo.items);
 }
 
 const types = @import("types.zig");

@@ -14,7 +14,7 @@ const BlockRange = struct {
 
 pub const BlockCall = struct {
     // first operand is the block index, the others are vregs.
-    operands: PooledVector(codegen.Index),
+    operands: []const codegen.Index,
 };
 
 // pub const TerminatorData = union(enum) {
@@ -23,20 +23,37 @@ pub const BlockCall = struct {
 // };
 
 pub const MachBlock = struct {
-    index_start: codegen.Index,
+    start: codegen.Index,
     params: []const regalloc.VirtualReg,
     insts: []const MachineInst,
     succ_phis: []const BlockCall,
     // terminator_data: TerminatorData,
 };
 
-blocks: std.ArrayList(MachBlock),
+const BlockHeader = struct {
+    start: codegen.Index,
+    end: codegen.Index,
+    succ_phis: []const BlockCall,
+    params: []const regalloc.VirtualReg,
+};
+
+num_virtual_regs: usize,
+block_headers: []const BlockHeader,
+// blocks: std.ArrayList(MachBlock),
+insts: []const MachineInst,
 // vregs: std.ArrayList(codegen.regalloc.VirtualReg),
 
-pub fn getBlock(self: MachineFunction, block_id: codegen.Index) ?*MachBlock {
-    if (block_id >= self.block.items.len) {
+pub fn getBlock(self: MachineFunction, block_id: codegen.Index) ?MachBlock {
+    if (block_id >= self.block_headers.len) {
         return null;
     }
 
-    return &self.block.items[block_id];
+    const header = self.block_headers.items[block_id];
+
+    return MachBlock{
+        .start = header.start,
+        .params = header.params,
+        .insts = self.insts[header.start..header.end],
+        .succ_phis = header.succ_phis,
+    };
 }
