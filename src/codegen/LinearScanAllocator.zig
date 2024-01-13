@@ -13,8 +13,6 @@ const LinearScanAllocator = @This();
 const VirtualReg = @import("regalloc.zig").VirtualReg;
 const LocationConstraint = @import("regalloc.zig").LocationConstraint;
 
-// TODO: deal with different regclasses too
-
 const LiveRange = struct {
     start: usize,
     end: usize,
@@ -120,11 +118,11 @@ pub fn run(
             else => {},
         }
 
-        std.debug.print("active at {} {any}\n\n", .{ i, self.active.items });
+        // std.debug.print("active at {} {any}\n\n", .{ i, self.active.items });
 
-        try self.assignAllocateRegOrStack(allocator, current, abi.pregs, intervals[i + 1 ..]);
+        try self.assignAllocateRegOrStack(allocator, current, abi, intervals[i + 1 ..]);
 
-        std.debug.print("active at {} {any}\n\n", .{ i, self.active.items });
+        // std.debug.print("active at {} {any}\n\n", .{ i, self.active.items });
     }
 }
 
@@ -132,11 +130,13 @@ pub fn assignAllocateRegOrStack(
     self: *LinearScanAllocator,
     allocator: std.mem.Allocator,
     current: LiveRange,
-    pregs: []const PhysicalReg,
+    abi: Abi,
     unhandled: []const LiveRange,
 ) !void {
     var free_until = std.AutoArrayHashMap(PhysicalReg, usize).init(allocator);
     defer free_until.deinit();
+
+    const pregs = abi.getPregsByRegClass(current.vreg.class);
 
     try free_until.ensureTotalCapacity(pregs.len);
 
@@ -154,14 +154,14 @@ pub fn assignAllocateRegOrStack(
 
     // and the next intersection of current and the interval if inactive.
     for (self.inactive.items) |interval| {
-        if (rangesIntersect(interval.live_range, current)) {
+        if (interval.live_range.vreg.class == current.vreg.class and rangesIntersect(interval.live_range, current)) {
             try free_until.put(interval.preg, @max(interval.live_range.start, current.start));
         }
     }
 
     // add the intersection with fixed-reg ranges.
     for (unhandled) |interval| {
-        if (rangesIntersect(interval, current)) {
+        if (interval.vreg.class == current.vreg.class and rangesIntersect(interval, current)) {
             switch (interval.constraints) {
                 .fixed_reg => |preg| try free_until.put(preg, @max(interval.start, current.start)),
                 else => {},
@@ -239,14 +239,16 @@ fn assignAllocateBlockedReg(
 
     // calculate spill weight (cost) for the intervals blocking current
     for (self.active.items, 0..) |interval, i| {
-        const length = interval.live_range.end - interval.live_range.start;
-        const interference = intersectionWeight(current, interval.live_range); // should probably do this with all active intervals, but eh.
+        if (interval.live_range.vreg.class == current.vreg.class) {
+            const length = interval.live_range.end - interval.live_range.start;
+            const interference = intersectionWeight(current, interval.live_range); // should probably do this with all active intervals, but eh.
 
-        const cost = length * 3 + interference * 4;
+            const cost = length * 3 + interference * 4;
 
-        if (cost < min_active_cost) {
-            min_active_cost = cost;
-            min_cost_idx = i;
+            if (cost < min_active_cost) {
+                min_active_cost = cost;
+                min_cost_idx = i;
+            }
         }
     }
 
@@ -299,10 +301,14 @@ test "poop" {
                 .constraints = .none,
             },
         },
-        Abi{ .pregs = &.{
-            PhysicalReg{ .class = .int, .encoding = 0 },
-            PhysicalReg{ .class = .int, .encoding = 1 },
-        } },
+        Abi{
+            .int_pregs = &.{
+                PhysicalReg{ .class = .int, .encoding = 0 },
+                PhysicalReg{ .class = .int, .encoding = 1 },
+            },
+            .float_pregs = &.{},
+            .vector_pregs = &.{},
+        },
     );
 
     for (regalloc.allocations.items) |allocation| {
@@ -317,8 +323,8 @@ test "poop" {
             LiveRange{
                 .start = 0,
                 .end = 3,
-                .vreg = VirtualReg{ .class = .int, .index = 0 },
-                .constraints = .{ .fixed_reg = PhysicalReg{ .class = .int, .encoding = 5 } },
+                .vreg = VirtualReg{ .class = .float, .index = 0 },
+                .constraints = .none,
             },
             LiveRange{
                 .start = 1,
@@ -332,11 +338,23 @@ test "poop" {
                 .vreg = VirtualReg{ .class = .int, .index = 1 },
                 .constraints = .none,
             },
+            LiveRange{
+                .start = 2,
+                .end = 5,
+                .vreg = VirtualReg{ .class = .float, .index = 1 },
+                .constraints = .none,
+            },
         },
-        Abi{ .pregs = &.{
-            PhysicalReg{ .class = .int, .encoding = 0 },
-            PhysicalReg{ .class = .int, .encoding = 1 },
-        } },
+        Abi{
+            .int_pregs = &.{
+                PhysicalReg{ .class = .int, .encoding = 0 },
+                PhysicalReg{ .class = .int, .encoding = 1 },
+            },
+            .float_pregs = &.{
+                PhysicalReg{ .class = .float, .encoding = 0 },
+            },
+            .vector_pregs = &.{},
+        },
     );
 
     for (regalloc.allocations.items) |allocation| {
