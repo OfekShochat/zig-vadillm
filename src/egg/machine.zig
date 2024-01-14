@@ -77,7 +77,7 @@ pub fn Program(comptime LN: type) type {
                 }
             }
 
-            try insts.append(Instruction{ .Yield = v2r.values() });
+            try insts.append(Instruction{ .Yield = try std.testing.allocator.dupe(usize, v2r.values()) });
 
             for (insts.items) |inst| {
                 std.log.warn("instruction: {}", .{inst});
@@ -213,12 +213,15 @@ pub fn Machine(comptime LN: type) type {
 
                     .Yield => |yield| {
                         var matches = std.AutoArrayHashMap(usize, usize).init(std.testing.allocator);
-                        std.log.warn("match: {}", .{yield[0]});
+                        defer matches.deinit();
+                        std.log.warn("match: {}", .{yield.len});
                         for (yield) |val| {
+                            std.log.warn("yield value: {}", .{self.regs.items[val]});
                             try matches.put(self.regs.items[val], val);
                         }
 
-                        results.* = matches;
+                        results.* = try matches.clone();
+
                         return true;
                     },
                 }
