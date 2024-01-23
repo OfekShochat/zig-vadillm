@@ -122,10 +122,120 @@ pub const Operand = struct {
     }
 };
 
-pub const Stitch = struct {
-    from: PhysicalReg,
-    to: PhysicalReg,
+pub const Allocation = union(enum) {
+    stack: void,
+    preg: PhysicalReg,
 };
+
+pub const Stitch = struct {
+    codepoint: usize,
+    from: Allocation,
+    to: Allocation,
+};
+
+pub const LiveRange = struct {
+    start: usize,
+    end: usize,
+    vreg: VirtualReg,
+    spill_cost: usize,
+    constraints: LocationConstraint,
+};
+
+pub fn rangesIntersect(a: LiveRange, start: usize, end: usize) bool {
+    return (a.start >= start and a.start <= end) or (start >= a.start and start <= a.end);
+}
+
+pub const LiveBundle = struct {
+    // every vreg in ranges should be equivalent - holding/referencing
+    // the same value, while not overlapping.
+    ranges: []const LiveRange,
+    constraints: LocationConstraint, // the maximum constraints
+    start: usize,
+    end: usize,
+
+    pub fn calculateSpillcost(self: LiveBundle) usize {
+        var sum: usize = 0;
+        for (self.ranges) |range| {
+            sum += range.spill_cost;
+        }
+        return sum;
+    }
+
+    pub fn class(self: LiveBundle) RegClass {
+        // I can assume ranges is non null
+        return self.ranges[0].vreg.class;
+    }
+
+    pub fn intersects(self: LiveBundle, other: LiveBundle) bool {
+        if (self.end < other.start or other.end < self.start) {
+            return false;
+        }
+
+        var i: usize = 0;
+        var j: usize = 0;
+
+        while (i < self.ranges.len and j < other.ranges.len) {
+            const a = self.ranges[i];
+            const b = other.ranges[j];
+
+            if (rangesIntersect(a, b.start, b.end)) {
+                return true;
+            }
+
+            if (a.end < b.start) {
+                i += 1;
+            } else {
+                j += 1;
+            }
+        }
+
+        return false;
+    }
+};
+
+pub const AllocatedLiveBundle = struct {
+    bundle: LiveBundle,
+    allocation: Allocation,
+};
+
+// TODO: find a better name
+pub fn earlyLateToIndex(early_late: usize) usize {
+    return early_late / 2;
+}
+
+pub fn encodeEarlyLate(index: usize, timing: OperandUseTiming) usize {
+    return index * 2 + @intFromEnum(timing);
+}
+
+pub fn allocatedBundlesLessThan(_: void, lhs: AllocatedLiveBundle, rhs: AllocatedLiveBundle) bool {
+    return lhs.live_range.from < rhs.live_range.from;
+}
+
+pub fn calculateStitches(allocator: std.mem.Allocator, allocated_bundles: []AllocatedLiveBundle) ![]const Stitch {
+    std.sort.heap(AllocatedLiveBundle, allocated_bundles, void{}, allocatedBundlesLessThan);
+
+    var last_used = std.AutoHashMap(VirtualReg, *LiveBundle).init(allocator);
+    defer last_used.deinit();
+
+    var stitches = std.ArrayList(Stitch).init(allocator);
+
+    // NOTE: live ranges are live always until they are dead,
+    // and that's why we can do this easily. Remember, the
+    // ranges are still in early/late encoding.
+    for (allocated_bundles) |allocated_bundle| {
+        for (allocated_bundle.bundle.ranges) |range| {
+            if (last_used.get(range.vreg)) |last_bundle| {
+                try stitches.append(Stitch{
+                    .codepoint = allocated_bundle.bundle.start,
+                    .from = last_bundle.allocation,
+                    .to = allocated_bundle.allocation,
+                });
+            }
+        }
+    }
+
+    return stitches.toOwnedSlice();
+}
 
 test "regalloc.Operand" {
     // use constants and also make a test that should panic (index too high?)
