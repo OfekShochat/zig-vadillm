@@ -13,7 +13,7 @@ pub fn IntervalTree(comptime T: type) type {
 
         const Self = @This();
 
-        pub const Color = enum { red, black };
+        pub const Color = enum { red, black, white };
 
         const Node = struct {
             range: T,
@@ -50,6 +50,13 @@ pub fn IntervalTree(comptime T: type) type {
 
         pub fn deinit(self: *Self) void {
             self.arena.deinit();
+        }
+        
+        fn sibiling(node: *Node) *Node {
+            return switch (getParentDirection(node)) {
+                .left => node.parent.right,
+                .right => node.parent.left,
+            };
         }
 
         /// debug function
@@ -134,6 +141,80 @@ pub fn IntervalTree(comptime T: type) type {
             }
 
             return .eq;
+        }
+
+        pub fn successor(node: *Node) ?*Node {
+            if (node.right != &sentinel) {
+                var result: *Node = node.right;
+                while (result.left != &sentinel) result = result.left;
+                return result;
+            } else {
+                var result: *Node = node;
+                while (result != &sentinel and !isLeftChild(result)) result = result.parent;
+                if (result == &sentinel) return null;
+                return result.parent;
+            }
+        }
+
+        fn isLeftChild(node: *Node) bool {
+            return node == node.parent.left;
+        }
+
+        fn restoreBlackProperty(self: *Self, to_fix: *Node) void {
+            if (sibiling(to_fix).color == .red) {
+                self.rotateUp(sibiling(to_fix));
+            }
+
+            if (insideChild(sibiling(to_fix)).color != .red and outsideChild(sibiling(to_fix)).color != .red) {
+                sibiling(to_fix).color = .red;
+
+                if (to_fix.parent.color == .red) {
+                    to_fix.parent.color = .black;
+                } else if (to_fix.parent != self.root) {
+                    self.restoreBlackProperty(to_fix.parent);
+                }
+            } else {
+                const far_nephew = outsideChild(sibiling(to_fix));
+                if (far_nephew.color != .red)  {
+                    self.rotateUp(far_nephew);
+                }
+
+                self.rotateUp(sibiling(to_fix));
+
+                uncle(to_fix).color = .black;
+            }
+        }
+
+        pub fn delete(self: *Self, range: T) !void {
+            var to_delete = self.root;
+
+            while (to_delete != &sentinel) {
+                to_delete = switch (compare(range, to_delete.range)) {
+                    .lt => to_delete.left,
+                    .gt => to_delete.right,
+                    .eq => break,
+                };
+            }
+
+            if (to_delete == &sentinel) {
+                return error.NoSuchKey;
+            }
+
+            if (to_delete.left != &sentinel and to_delete.right != &sentinel) {
+                to_delete.range = successor(to_delete).?.range;
+                to_delete = successor(to_delete).?;
+            }
+
+            if (to_delete != self.root and to_delete.color != .red) {
+                to_delete.color = .white;
+                self.restoreBlackProperty(to_delete);
+            }
+
+            const child = if (to_delete.left != &sentinel) to_delete.left else to_delete.right;
+
+            self.setChild(to_delete.parent, child, getParentDirection(to_delete));
+
+            self.arena.allocator().destroy(to_delete);
         }
 
         pub fn insert(self: *Self, range: T) !void {
@@ -333,6 +414,7 @@ pub fn IntervalTree(comptime T: type) type {
             const color = switch (current.color) {
                 .black => "black",
                 .red => "red",
+                .white => "white",
             };
 
             try writer.print("  \"{*}\" [label=\"({}-{}, {}, {})\" color={s}]\n", .{
@@ -445,6 +527,22 @@ test "interval tree" {
 
         results.clearRetainingCapacity();
     }
+
+    std.testing.expectError(error.NoSuchKey, interval_tree.delete(Range{ .start = 4, .end = 5}));
+
+    {
+        try interval_tree.delete(.{ .start = 3, .end = 5 });
+
+        try interval_tree.search(.{ .start = 3, .end = 5 }, &results);
+        std.sort.block(Range, results.items, void{}, Range.lessThan);
+        try std.testing.expectEqualSlices(Range, results.items, &.{
+            Range{ .start = 4, .end = 6 },
+        });
+
+        results.clearRetainingCapacity();
+    }
+
+    // TODO: add tests on structure.
 }
 
 test "interval tree bench/fuzzing" {
