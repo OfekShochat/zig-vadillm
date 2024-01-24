@@ -47,6 +47,17 @@ pub fn IntervalTree(comptime T: type) type {
                 .root = &sentinel,
             };
         }
+        
+        pub fn initWithArena(arena: std.heap.ArenaAllocator) Self {
+            sentinel.left = &sentinel;
+            sentinel.right = &sentinel;
+            sentinel.parent = &sentinel;
+
+            return Self{
+                .arena = arena,
+                .root = &sentinel,
+            };
+        }
 
         pub fn deinit(self: *Self) void {
             self.arena.deinit();

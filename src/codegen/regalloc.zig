@@ -13,6 +13,11 @@ pub const VirtualReg = struct {
     index: u32,
 };
 
+pub const Output = struct {
+    allocations: []const Allocation,
+    stitches: Stitch,
+};
+
 pub const PhysicalReg = struct {
     class: RegClass,
     /// the unique encoding of a register. should fit into 7 bits.
@@ -137,6 +142,7 @@ pub const LiveRange = struct {
     start: usize,
     end: usize,
     vreg: VirtualReg,
+    allocated_preg: ?PhysicalReg = null,
     spill_cost: usize,
     constraints: LocationConstraint,
 };
