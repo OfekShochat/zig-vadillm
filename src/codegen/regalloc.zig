@@ -146,6 +146,7 @@ pub const LiveRange = struct {
 };
 
 pub const LiveInterval = struct {
+    ranges: []const *LiveRange,
     constraints: LocationConstraint,
     preg: ?PhysicalReg,
     vreg: VirtualReg,

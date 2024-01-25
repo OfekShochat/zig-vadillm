@@ -20,21 +20,23 @@ fn priorityCompare(_: void, lhs: regalloc.LiveRange, rhs: regalloc.LiveRange) st
     return .eq;
 }
 
-queue: std.PriorityQueue(regalloc.LiveRange, void, priorityCompare),
+queue: std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare),
+interval_arena: std.heap.ArenaAllocator,
 
+live_intervals: LiveIntervalContainer,
 // int, float, vec
-live_unions: std.EnumMap(regalloc.RegClass, IntervalTree(regalloc.LiveRange)),
+live_unions: std.EnumMap(regalloc.RegClass, IntervalTree(*regalloc.LiveRange)),
 abi: Abi,
 allocator: std.mem.Allocator,
 
 pub fn init(allocator: std.mem.Allocator, abi: Abi) Self {
     var arena = std.ArenaAllocator.init(allocator);
-    var live_unions = std.EnumMap(regalloc.RegClass, IntervalTree(regalloc.LiveRange)).init(allocator);
+    var live_unions = std.EnumMap(regalloc.RegClass, *IntervalTree(regalloc.LiveRange)).init(allocator);
 
     inline for (std.meta.fields(regalloc.RegClass)) |class| {
         try live_unions.put(
             class,
-            IntervalTree(regalloc.LiveRange).initWithArena(arena),
+            IntervalTree(*regalloc.LiveRange).initWithArena(arena),
         );
     }
 
@@ -66,8 +68,8 @@ pub fn run(self: *Self) !regalloc.Output {
     }
 }
 
-fn tryAssignMightEvict(self: *Self, live_range: regalloc.LiveRange) !?regalloc.PhysicalReg {
-    const interferences = std.ArrayList(regalloc.LiveRange).init(self.allocator);
+fn tryAssignMightEvict(self: *Self, live_range: *regalloc.LiveRange) !?regalloc.PhysicalReg {
+    const interferences = std.ArrayList(*regalloc.LiveRange).init(self.allocator);
     defer interferences.deinit();
 
     try interferences.ensureTotalCapacity(4);
@@ -108,7 +110,7 @@ fn tryAssignMightEvict(self: *Self, live_range: regalloc.LiveRange) !?regalloc.P
 
 fn tryEvict(
     self: *Self,
-    live_range: regalloc.LiveRange,
+    live_range: *regalloc.LiveRange,
     live_union: *IntervalTree(regalloc.LiveRange),
     interferences: []const regalloc.LiveRange,
 ) !?regalloc.PhysicalReg {
@@ -173,10 +175,69 @@ fn tryEvict(
     return chosen_preg;
 }
 
-fn trySplit(self: *Self, live_range: regalloc.LiveRange) !?regalloc.PhysicalReg {
-    
+fn trySplit(self: *Self, live_range: *regalloc.LiveRange) !?regalloc.PhysicalReg {
+    const interferences = std.ArrayList(*regalloc.LiveRange).init(self.allocator);
+    defer interferences.deinit();
+
+    try interferences.ensureTotalCapacity(4);
+
+    var live_union = self.live_unions.getPtr(live_range.class);
+    try live_union.search(live_range, &interferences);
+
+    std.debug.assert(interferences.items.len > 0);
+
+    var first_point_of_intersection = interferences.items[0];
+
+    for (interferences.items) |interference| {
+        if (interference.start > live_range.start and interference.start < first_point_of_intersection) {
+            first_point_of_intersection = interference.start;
+        }
+    }
+
+    // split live interval
+    const split_ranges = splitAt(first_point_of_intersection, live_range.live_interval);
+
+    try self.queue.add(split_ranges[0]);
+    try self.queue.add(split_ranges[1]);
 }
 
+fn splitAt(at: usize, live_interval: *regalloc.LiveInterval) ![2]LiveInterval {
+    const allocator = self.interval_arena.allocator();
+
+    var split_intervals = try allocator.alloc(regalloc.LiveInterval, 2);
+
+    for (live_interval.ranges, 0..) |range, i| {
+        if (range.start < at and at < range.end) {
+            var a_ranges = try std.mem.copy(allocator, live_interval.ranges[0..i + 1]);
+            var b_ranges = try std.mem.copy(allocator, live_interval.ranges[i..]);
+
+            a_ranges[i] = .{
+                .start = range.start,
+                .end = at,
+            };
+            
+            b_ranges[0] = .{
+                .start = at + 1,
+                .end = range.end,
+            };
+
+            split_intervals[0].ranges = a_ranges;
+            split_intervals[1].ranges = b_ranges;
+
+            allocator.free(live_interval.ranges);
+
+            break;
+        }
+    } else {
+        return error.AtDoesNotIntersect;
+    }
+
+    interval_a.
+
+    allocator.destroy(live_interval);
+
+    reutrn intervals;
+}
 
 // this is not comparable to `live_range`'s cost, so I can't use it in the cost calc:
 // + interference_count_weight * entry.value_ptr.interference_count;
