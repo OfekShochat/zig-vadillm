@@ -141,10 +141,14 @@ pub const Stitch = struct {
 pub const LiveRange = struct {
     start: usize,
     end: usize,
-    vreg: VirtualReg,
-    allocated_preg: ?PhysicalReg = null,
+    live_interval: *LiveInterval,
     spill_cost: usize,
+};
+
+pub const LiveInterval = struct {
     constraints: LocationConstraint,
+    preg: ?PhysicalReg,
+    vreg: VirtualReg,
 };
 
 pub fn rangesIntersect(a: LiveRange, start: usize, end: usize) bool {

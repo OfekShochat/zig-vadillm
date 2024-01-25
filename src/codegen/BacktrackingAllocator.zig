@@ -6,6 +6,8 @@ const Abi = @import("Abi.zig");
 
 const Self = @This();
 
+const hint_weight = 20;
+
 fn priorityCompare(_: void, lhs: regalloc.LiveRange, rhs: regalloc.LiveRange) std.math.Order {
     if (lhs.spill_cost > rhs.spill_cost) {
         return .gt;
@@ -51,19 +53,20 @@ pub fn deinit(self: *Self) void {
 
 pub fn run(self: *Self) !regalloc.Output {
     while (self.queue.removeOrNull()) |live_range| {
-        if (try self.tryAssignAndPossiblyEvict(live_range)) {
+        if (try self.tryAssignMightEvict(live_range)) |best_preg| {
             continue;
         }
 
-        if (try self.trySplit(live_range)) {
+        if (try self.trySplit(live_range)) |best_preg| {
             continue;
         }
 
+        // maybe add to second-chance allocation queue?
         try self.spill(live_range);
     }
 }
 
-fn tryAssignAndPossiblyEvict(self: *Self, live_range: regalloc.LiveRange) !?regalloc.PhysicalReg {
+fn tryAssignMightEvict(self: *Self, live_range: regalloc.LiveRange) !?regalloc.PhysicalReg {
     const interferences = std.ArrayList(regalloc.LiveRange).init(self.allocator);
     defer interferences.deinit();
 
@@ -83,18 +86,20 @@ fn tryAssignAndPossiblyEvict(self: *Self, live_range: regalloc.LiveRange) !?rega
         avail_pregs.put(unavail_preg, false);
     }
 
-    // We have a hint. This is equivalent to using split-able bundles.
-    if (live_range.preg) |hint| {
+    if (live_range.live_interval.preg) |hint| {
+        // We have a hint; use it if available.
+        // Otherwise, let the splitter do the work.
         if (avail_pregs.get(hint).?) {
-            return hint;
+            return preg;
         }
-    }
-
-    // If any preg is available for the whole live-range, use it.
-    var iter = avail_pregs.iterator();
-    while (iter.next()) |entry| {
-        if (entry.value_ptr.*) {
-            return entry.key_ptr.*;
+    } else {
+        // If there's no hint, any preg that is available 
+        // for the whole live-range is great.
+        var iter = avail_pregs.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.*) {
+                return entry.key_ptr.*;
+            }
         }
     }
 
@@ -111,36 +116,50 @@ fn tryEvict(
     // than the ones in `interferences`, as we are allocating
     // from the most costly to the least.
 
-    const InterferenceCostDetails = struct {
+    const EvictionCostDetails = struct {
         total_spill_cost: usize,
         interference_count: usize,
     };
-    
-    // 1. Choose a preg to evict based on the `interferences`.
+
+    // 1. Calculate costs and, if a hint wasn't found,
+    // choose a preg to evict based on the `interferences`.
 
     var preg_map = std.AutoArrayHashMap(regalloc.PhysicalReg, InterferenceCostDetails).init(self.allocator);
     defer preg_map.deinit();
 
-    // 1.1 Populate the map with spill cost and interference count.
+    // 1.1 Populate the map with eviction costs.
     for (interferences) |interference| {
-        var details = try preg_map.getOrPut(
-            interference.preg,
-            InterferenceCostDetails{ .total_spill_cost = 0, .interference_count = 0 },
-        );
+        var details = preg_map.get(
+            interference.live_interval.preg.?,
+        ) orelse EvictionCostDetails{ .total_spill_cost = 0, .interference_count = 0 };
+
         details.total_spill_cost += interference.spill_cost;
-        details.interference_count += @min(interference.end, live_range.end) - @max(interference.start, live_range.start);
+
         try preg_map.put(interference.preg, details);
     }
 
-    // 1.2 Find the minimal interfering preg to evict.
+    // 1.2 Either use the hint or find the minimal interfering preg to evict.
     var min_cost = std.math.maxInt(usize);
     var chosen_preg: ?regalloc.PhysicalReg = null;
 
-    for (preg_map.entries()) |entry| {
-        if (entry.value.total_spill_cost < min_cost) {
-            min_cost = entry.value.total_spill_cost;
-            chosen_preg = entry.key;
+    if (live_range.live_interval.preg) |hint| {
+        chosen_preg = hint;
+        min_cost = preg_map.get(hint).?;
+    } else {
+        var iter = preg_map.iterator();
+        while (iter.next()) |entry| {
+            const cost = entry.value_ptr.total_spill_cost;
+
+            if (cost < min_cost) {
+                min_cost = cost;
+                chosen_preg = entry.key_ptr;
+            }
         }
+    }
+
+    // We only evict spill costs less than ours, so that we are guaranteed a solution.
+    if (live_range.spill_cost < min_cost) {
+        return null;
     }
 
     // 2. Evict all `interferences` of the chosen preg.
@@ -153,3 +172,11 @@ fn tryEvict(
 
     return chosen_preg;
 }
+
+fn trySplit(self: *Self, live_range: regalloc.LiveRange) !?regalloc.PhysicalReg {
+    
+}
+
+
+// this is not comparable to `live_range`'s cost, so I can't use it in the cost calc:
+// + interference_count_weight * entry.value_ptr.interference_count;
