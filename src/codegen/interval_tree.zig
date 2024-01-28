@@ -5,8 +5,13 @@ const builtin = @import("builtin");
 // This is a Self Balancing Red-Black Tree with a maximum endpoint at each node.
 pub fn IntervalTree(comptime T: type) type {
     return struct {
+        const DerefedT = switch (@typeInfo(T)) {
+            .Pointer => |Ptr| Ptr.child,
+            else => T,
+        };
+
         comptime {
-            if (!@hasField(T, "start") or !@hasField(T, "end")) {
+            if (!@hasField(DerefedT, "start") or !@hasField(DerefedT, "end")) {
                 @compileError("`T` has to have both `T.start` and `T.end`.");
             }
         }
@@ -14,6 +19,11 @@ pub fn IntervalTree(comptime T: type) type {
         const Self = @This();
 
         pub const Color = enum { red, black, white };
+
+        pub fn rangesIntersect(a: T, b: T) bool {
+            return (a.rawStart() >= b.rawStart() and a.rawStart() <= b.rawEnd()) or
+                (b.rawStart() >= a.rawStart() and b.rawStart() <= a.rawEnd());
+        }
 
         const Node = struct {
             range: T,
@@ -24,14 +34,10 @@ pub fn IntervalTree(comptime T: type) type {
             left: *Node = undefined,
         };
 
-        pub fn rangesIntersect(a: T, b: T) bool {
-            return (a.start >= b.start and a.start <= b.end) or (b.start >= a.start and b.start <= a.end);
-        }
-
         var sentinel = Node{
             .range = undefined,
             .color = .black,
-            .max_end = ~@as(usize, 0),
+            .max_end = undefined,
         };
 
         arena: std.heap.ArenaAllocator,
@@ -47,7 +53,7 @@ pub fn IntervalTree(comptime T: type) type {
                 .root = &sentinel,
             };
         }
-        
+
         pub fn initWithArena(arena: std.heap.ArenaAllocator) Self {
             sentinel.left = &sentinel;
             sentinel.right = &sentinel;
@@ -62,7 +68,7 @@ pub fn IntervalTree(comptime T: type) type {
         pub fn deinit(self: *Self) void {
             self.arena.deinit();
         }
-        
+
         fn sibiling(node: *Node) *Node {
             return switch (getParentDirection(node)) {
                 .left => node.parent.right,
@@ -129,25 +135,25 @@ pub fn IntervalTree(comptime T: type) type {
                 try results.append(current.range);
             }
 
-            if (current.right != &sentinel and range.start <= current.max_end) {
+            if (current.right != &sentinel and range.rawStart() <= current.max_end) {
                 try self.searchInternal(range, current.right, results);
             }
         }
 
         fn compare(lhs: T, rhs: T) std.math.Order {
-            if (lhs.start < rhs.start) {
+            if (lhs.rawStart() < rhs.rawStart()) {
                 return .lt;
             }
 
-            if (lhs.start > rhs.start) {
+            if (lhs.rawStart() > rhs.rawStart()) {
                 return .gt;
             }
 
-            if (lhs.end < rhs.end) {
+            if (lhs.rawEnd() < rhs.rawEnd()) {
                 return .lt;
             }
 
-            if (lhs.end > rhs.end) {
+            if (lhs.rawEnd() > rhs.rawEnd()) {
                 return .lt;
             }
 
@@ -186,7 +192,7 @@ pub fn IntervalTree(comptime T: type) type {
                 }
             } else {
                 const far_nephew = outsideChild(sibiling(to_fix));
-                if (far_nephew.color != .red)  {
+                if (far_nephew.color != .red) {
                     self.rotateUp(far_nephew);
                 }
 
@@ -233,7 +239,7 @@ pub fn IntervalTree(comptime T: type) type {
 
             new_node.* = Node{
                 .range = range,
-                .max_end = range.end,
+                .max_end = range.rawEnd(),
                 .color = .red,
                 .left = &sentinel,
                 .right = &sentinel,
@@ -362,6 +368,8 @@ pub fn IntervalTree(comptime T: type) type {
             self.setChild(node.parent, insideChild(node), node_dir);
             self.setChild(node.parent.parent, node, getParentDirection(node.parent));
             self.setChild(node, parent, node_dir.opposite());
+
+            recalculateMaxEnd(parent);
         }
 
         fn restoreRedProperty(self: *Self, node: *Node) void {
@@ -473,6 +481,16 @@ const Range = struct {
     start: usize,
     end: usize,
 
+    const Point = usize;
+
+    pub fn rawStart(self: Range) usize {
+        return self.start;
+    }
+
+    pub fn rawEnd(self: Range) usize {
+        return self.end;
+    }
+
     pub fn lessThan(_: void, self: Range, other: Range) bool {
         if (self.start == other.start) {
             return self.end < other.end;
@@ -539,7 +557,7 @@ test "interval tree" {
         results.clearRetainingCapacity();
     }
 
-    std.testing.expectError(error.NoSuchKey, interval_tree.delete(Range{ .start = 4, .end = 5}));
+    try std.testing.expectError(error.NoSuchKey, interval_tree.delete(Range{ .start = 4, .end = 5 }));
 
     {
         try interval_tree.delete(.{ .start = 3, .end = 5 });

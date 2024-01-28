@@ -1,6 +1,7 @@
 //! This is heavily inspired by Cranelift's regalloc2.
 
 const std = @import("std");
+const codegen = @import("codegen.zig");
 
 pub const RegClass = enum(u2) {
     int,
@@ -139,10 +140,40 @@ pub const Stitch = struct {
 };
 
 pub const LiveRange = struct {
-    start: usize,
-    end: usize,
+    start: codegen.CodePoint,
+    end: codegen.CodePoint,
     live_interval: *LiveInterval,
+    uses: []const codegen.CodePoint,
     spill_cost: usize,
+
+    split_count: u8 = 0,
+    evicted_count: u8 = 0,
+
+    pub const Point = u32;
+
+    pub fn rawStart(self: LiveRange) usize {
+        return self.start.point;
+    }
+
+    pub fn rawEnd(self: LiveRange) usize {
+        return self.end.point;
+    }
+
+    pub fn isMinimal(self: LiveRange) bool {
+        return std.meta.eql(self.start.getNextInst(), self.end);
+    }
+
+    pub fn class(self: LiveRange) RegClass {
+        return self.live_interval.vreg.class;
+    }
+
+    pub fn vreg(self: LiveRange) VirtualReg {
+        return self.live_interval.vreg;
+    }
+
+    pub fn preg(self: LiveRange) ?PhysicalReg {
+        return self.live_interval.preg;
+    }
 };
 
 pub const LiveInterval = struct {
