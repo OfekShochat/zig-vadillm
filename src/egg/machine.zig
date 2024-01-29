@@ -110,7 +110,7 @@ pub fn Machine(comptime L: type) type {
     return struct {
         program: Program(L),
         regs: std.ArrayList(egg.Id),
-        stack: std.ArrayList(Binder),
+        stack: std.ArrayList(BacktrackingPoint),
         index: usize = 0,
 
         const LT = @typeInfo(L).Union.tag_type.?;
@@ -133,13 +133,13 @@ pub fn Machine(comptime L: type) type {
             }
         };
 
-        const Binder = struct { out: usize, next: usize, searcher: EClassSearcher };
+        const BacktrackingPoint = struct { out: usize, next: usize, searcher: EClassSearcher };
 
         pub fn init(program: Program(L), allocator: std.mem.Allocator) @This() {
             return @This(){
                 .program = program,
                 .regs = std.ArrayList(egg.Id).init(allocator),
-                .stack = std.ArrayList(Binder).init(allocator),
+                .stack = std.ArrayList(BacktrackingPoint).init(allocator),
             };
         }
 
@@ -206,7 +206,7 @@ pub fn Machine(comptime L: type) type {
                 switch (inst) {
                     .bind => |bind| {
                         const eclass = egraph.get(self.regs.items[bind.reg]).?;
-                        var binder = Binder{
+                        var binder = BacktrackingPoint{
                             .out = bind.out_reg,
                             .next = self.index,
                             .searcher = EClassSearcher{
