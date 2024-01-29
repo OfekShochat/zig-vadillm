@@ -457,6 +457,21 @@ pub fn IntervalTree(comptime T: type) type {
             try writeAllNodes(current.right, visited, writer);
         }
 
+        pub fn collect(self: Self, ranges: *std.ArrayList(T)) !void {
+            return self.collectInternal(self.root, ranges);
+        }
+
+        pub fn collectInternal(self: Self, current: *Node, ranges: *std.ArrayList(T)) !void {
+            if (current == &sentinel) {
+                return;
+            }
+
+            try ranges.append(current.range);
+
+            try self.collectInternal(current.left, ranges);
+            try self.collectInternal(current.right, ranges);
+        }
+
         pub fn format(
             self: Self,
             comptime _: []const u8,

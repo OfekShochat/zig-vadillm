@@ -32,6 +32,7 @@ fn priorityCompare(_: void, lhs: *regalloc.LiveRange, rhs: *regalloc.LiveRange) 
 // }
 
 queue: std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare),
+second_cance: std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare),
 func: *const MachineFunction,
 
 // int, float, vec
@@ -53,6 +54,7 @@ pub fn init(allocator: std.mem.Allocator, abi: Abi, func: *const MachineFunction
     return Self{
         .func = func,
         .queue = std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare).init(allocator, void{}),
+        .second_cance = std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare).init(allocator, void{}),
         .live_unions = live_unions,
         .abi = abi,
         .allocator = allocator,
@@ -68,22 +70,49 @@ pub fn run(self: *Self, live_ranges: []const *regalloc.LiveRange) !?regalloc.Out
     try self.queue.addSlice(live_ranges);
 
     while (self.queue.removeOrNull()) |live_range| {
-        std.debug.print("Trying to assign {}\n", .{live_range});
+        // std.debug.print("Trying to assign {}\n", .{live_range});
         if (try self.tryAssignMightEvict(live_range)) |best_preg| {
-            std.debug.print("succeeded ({}).\n", .{best_preg});
+            // std.debug.print("succeeded ({}).\n", .{best_preg});
             try self.assignPregToLiveInterval(live_range.live_interval, best_preg);
             continue;
         }
 
-        std.debug.print("Trying to split {}\n", .{live_range});
-        if (live_range.evicted_count >= 2 or !(try self.trySplitAndRequeue(live_range))) {
-            // maybe add to a second-chance allocation queue?
-            // try self.spill(live_range);
-            std.debug.print("spilled {}\n", .{live_range});
+        const split = try self.trySplitAndRequeue(live_range);
+
+        if (!split or live_range.evicted_count > 1) {
+            std.debug.print("spilled {} {}-{}\n", .{ live_range.vreg().index, live_range.start, live_range.end });
+            try self.spill(live_range);
         }
     }
 
-    return null; // return output, no nulls
+    const allocations = try self.calculateAllocations();
+    for (allocations) |allocated| {
+        std.debug.print("{}: {}-{} {any}\n", .{ allocated.vreg().index, allocated.start, allocated.end, allocated.live_interval.allocation });
+    }
+
+    return null;
+    // return regalloc.Output{
+    //     .allocations = allocations,
+    //     // .stitches = try regalloc.calculateStitches(self.allocator, allocations),
+    // };
+}
+
+fn calculateAllocations(self: *Self) ![]*const regalloc.LiveRange {
+    var ranges = std.ArrayList(*regalloc.LiveRange).init(self.allocator);
+
+    for (self.live_unions.values) |live_union| {
+        try live_union.collect(&ranges);
+    }
+
+    // for (self.spilled) |spilled_range| {
+    //     try ranges.append(spilled_range);
+    // }
+
+    return ranges.toOwnedSlice();
+}
+
+fn spill(self: *Self, live_range: *regalloc.LiveRange) !void {
+    try self.second_cance.add(live_range);
 }
 
 fn assignPregToLiveInterval(self: *Self, live_interval: *regalloc.LiveInterval, preg: regalloc.PhysicalReg) !void {
@@ -92,7 +121,7 @@ fn assignPregToLiveInterval(self: *Self, live_interval: *regalloc.LiveInterval, 
         try live_union.insert(range);
     }
 
-    live_interval.preg = preg;
+    live_interval.allocation = .{ .preg = preg };
 }
 
 fn tryAssignMightEvict(self: *Self, live_range: *regalloc.LiveRange) !?regalloc.PhysicalReg {
@@ -111,7 +140,7 @@ fn tryAssignMightEvict(self: *Self, live_range: *regalloc.LiveRange) !?regalloc.
     }
 
     for (interferences.items) |interference| {
-        const unavail_preg = interference.preg() orelse @panic("`live_union` should contain only allocated ranges.");
+        const unavail_preg = interference.preg() orelse @panic("`live_union` should contain only preg allocated ranges.");
         try avail_pregs.put(unavail_preg, false);
     }
 
@@ -159,20 +188,20 @@ fn tryEvict(
     // 1.1 Populate the map with eviction costs.
     for (interferences) |interference| {
         var details = preg_map.get(
-            interference.live_interval.preg.?,
+            interference.preg().?,
         ) orelse EvictionCostDetails{ .total_spill_cost = 0, .interference_cost = 0 };
 
         details.total_spill_cost += interference.spill_cost;
         details.interference_cost += @min(live_range.rawEnd(), interference.rawEnd()) - @max(live_range.rawStart(), interference.rawStart());
 
-        try preg_map.put(interference.live_interval.preg.?, details);
+        try preg_map.put(interference.preg().?, details);
     }
 
     // 1.2 Either use the hint or find the minimal interfering preg to evict.
     var min_cost: usize = std.math.maxInt(usize);
     var chosen_preg: ?regalloc.PhysicalReg = null;
 
-    if (live_range.live_interval.preg) |hint| {
+    if (live_range.preg()) |hint| {
         chosen_preg = hint;
         min_cost = preg_map.get(hint).?.total_spill_cost;
     } else {
@@ -341,14 +370,14 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
     split_intervals[0] = .{
         .ranges = left_ranges,
         .constraints = live_interval.constraints,
-        .preg = null,
+        .allocation = null,
         .vreg = live_interval.vreg,
     };
 
     split_intervals[1] = .{
         .ranges = right_ranges,
         .constraints = live_interval.constraints,
-        .preg = null,
+        .allocation = null,
         .vreg = live_interval.vreg,
     };
     // std.debug.print("{}-{} {}-{}\n", .{ split_ranges[0].start, split_ranges[0].end, split_ranges[1].start, split_ranges[1].end });
@@ -456,7 +485,7 @@ test "poop" {
     intervals[0] = .{
         .ranges = live_ranges_thing,
         .constraints = .none,
-        .preg = null,
+        .allocation = null,
         .vreg = regalloc.VirtualReg{ .class = .int, .index = 0 },
     };
 
@@ -466,7 +495,7 @@ test "poop" {
     intervals[1] = .{
         .ranges = live_ranges_thing,
         .constraints = .none,
-        .preg = null,
+        .allocation = null,
         .vreg = regalloc.VirtualReg{ .class = .int, .index = 1 },
     };
 
@@ -476,7 +505,7 @@ test "poop" {
     intervals[2] = .{
         .ranges = live_ranges_thing,
         .constraints = .none,
-        .preg = null,
+        .allocation = null,
         .vreg = regalloc.VirtualReg{ .class = .int, .index = 2 },
     };
 
