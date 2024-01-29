@@ -1,6 +1,7 @@
 //! This is heavily inspired by Cranelift's regalloc2.
 
 const std = @import("std");
+const codegen = @import("codegen.zig");
 
 pub const RegClass = enum(u2) {
     int,
@@ -11,6 +12,11 @@ pub const RegClass = enum(u2) {
 pub const VirtualReg = struct {
     class: RegClass,
     index: u32,
+};
+
+pub const Output = struct {
+    allocations: []const Allocation,
+    stitches: Stitch,
 };
 
 pub const PhysicalReg = struct {
@@ -134,11 +140,56 @@ pub const Stitch = struct {
 };
 
 pub const LiveRange = struct {
-    start: usize,
-    end: usize,
-    vreg: VirtualReg,
+    start: codegen.CodePoint,
+    end: codegen.CodePoint,
+    live_interval: *LiveInterval,
+    uses: []const codegen.CodePoint,
     spill_cost: usize,
+
+    split_count: u8 = 0,
+    evicted_count: u8 = 0,
+
+    pub const Point = u32;
+
+    pub fn rawStart(self: LiveRange) usize {
+        return self.start.point;
+    }
+
+    pub fn compareFn(self: LiveRange, other: LiveRange) std.math.Order {
+        switch (self.start.compareFn(other)) {
+            .eq => self.end.compareFn(other.end),
+            else => |e| e,
+        }
+    }
+
+    pub fn rawEnd(self: LiveRange) usize {
+        return self.end.point;
+    }
+
+    pub fn isMinimal(self: LiveRange) bool {
+        return std.meta.eql(self.start.getNextInst(), self.end);
+    }
+
+    pub fn class(self: LiveRange) RegClass {
+        return self.live_interval.vreg.class;
+    }
+
+    pub fn vreg(self: LiveRange) VirtualReg {
+        return self.live_interval.vreg;
+    }
+
+    pub fn preg(self: LiveRange) ?PhysicalReg {
+        if (self.live_interval.allocation) |allocation| {
+            return allocation.preg;
+        } else return null;
+    }
+};
+
+pub const LiveInterval = struct {
+    ranges: []const *LiveRange,
     constraints: LocationConstraint,
+    allocation: ?Allocation,
+    vreg: VirtualReg,
 };
 
 pub fn rangesIntersect(a: LiveRange, start: usize, end: usize) bool {
@@ -207,14 +258,10 @@ pub fn encodeEarlyLate(index: usize, timing: OperandUseTiming) usize {
     return index * 2 + @intFromEnum(timing);
 }
 
-pub fn allocatedBundlesLessThan(_: void, lhs: AllocatedLiveBundle, rhs: AllocatedLiveBundle) bool {
-    return lhs.live_range.from < rhs.live_range.from;
-}
+pub fn calculateStitches(allocator: std.mem.Allocator, allocated_ranges: []LiveInterval) ![]const Stitch {
+    std.sort.heap(AllocatedLiveBundle, allocated_ranges, void{}, LiveRange.compareFn);
 
-pub fn calculateStitches(allocator: std.mem.Allocator, allocated_bundles: []AllocatedLiveBundle) ![]const Stitch {
-    std.sort.heap(AllocatedLiveBundle, allocated_bundles, void{}, allocatedBundlesLessThan);
-
-    var last_used = std.AutoHashMap(VirtualReg, *LiveBundle).init(allocator);
+    var last_used = std.AutoHashMap(VirtualReg, *LiveInterval).init(allocator);
     defer last_used.deinit();
 
     var stitches = std.ArrayList(Stitch).init(allocator);
@@ -222,13 +269,13 @@ pub fn calculateStitches(allocator: std.mem.Allocator, allocated_bundles: []Allo
     // NOTE: live ranges are live always until they are dead,
     // and that's why we can do this easily. Remember, the
     // ranges are still in early/late encoding.
-    for (allocated_bundles) |allocated_bundle| {
-        for (allocated_bundle.bundle.ranges) |range| {
+    for (allocated_ranges) |allocated_interval| {
+        for (allocated_interval.ranges) |range| {
             if (last_used.get(range.vreg)) |last_bundle| {
                 try stitches.append(Stitch{
-                    .codepoint = allocated_bundle.bundle.start,
+                    .codepoint = allocated_interval.bundle.start,
                     .from = last_bundle.allocation,
-                    .to = allocated_bundle.allocation,
+                    .to = allocated_interval.preg,
                 });
             }
         }
@@ -236,6 +283,36 @@ pub fn calculateStitches(allocator: std.mem.Allocator, allocated_bundles: []Allo
 
     return stitches.toOwnedSlice();
 }
+
+// pub fn allocatedBundlesLessThan(_: void, lhs: AllocatedLiveBundle, rhs: AllocatedLiveBundle) bool {
+//     return lhs.live_range.from < rhs.live_range.from;
+// }
+//
+// pub fn calculateStitches(allocator: std.mem.Allocator, allocated_bundles: []AllocatedLiveBundle) ![]const Stitch {
+//     std.sort.heap(AllocatedLiveBundle, allocated_bundles, void{}, allocatedBundlesLessThan);
+//
+//     var last_used = std.AutoHashMap(VirtualReg, *LiveBundle).init(allocator);
+//     defer last_used.deinit();
+//
+//     var stitches = std.ArrayList(Stitch).init(allocator);
+//
+//     // NOTE: live ranges are live always until they are dead,
+//     // and that's why we can do this easily. Remember, the
+//     // ranges are still in early/late encoding.
+//     for (allocated_bundles) |allocated_bundle| {
+//         for (allocated_bundle.bundle.ranges) |range| {
+//             if (last_used.get(range.vreg)) |last_bundle| {
+//                 try stitches.append(Stitch{
+//                     .codepoint = allocated_bundle.bundle.start,
+//                     .from = last_bundle.allocation,
+//                     .to = allocated_bundle.allocation,
+//                 });
+//             }
+//         }
+//     }
+//
+//     return stitches.toOwnedSlice();
+// }
 
 test "regalloc.Operand" {
     // use constants and also make a test that should panic (index too high?)

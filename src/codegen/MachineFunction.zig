@@ -1,9 +1,8 @@
 const std = @import("std");
 
 const regalloc = @import("regalloc.zig");
-const codegen = @import("../codegen.zig");
+const codegen = @import("codegen.zig");
 const MachineInst = @import("MachineInst.zig");
-const PooledVector = @import("../list_pool.zig").PooledVector;
 
 const MachineFunction = @This();
 
@@ -28,6 +27,7 @@ const BlockHeader = struct {
 };
 
 num_virtual_regs: usize,
+// ordered by start
 block_headers: []const BlockHeader,
 // blocks: std.ArrayList(MachBlock),
 insts: []const MachineInst,
@@ -53,6 +53,41 @@ pub fn getBlock(self: MachineFunction, block_id: codegen.Index) ?MachBlock {
         .start = header.start,
         .insts = self.insts[header.start..header.end],
     };
+}
+
+fn blockHeadersCompareFn(_: void, lhs: BlockHeader, rhs: BlockHeader) std.math.Order {
+    if (lhs.start > rhs.start) {
+        return .gt;
+    }
+
+    if (lhs.start < rhs.start) {
+        return .lt;
+    }
+
+    return .eq;
+}
+
+pub fn getBlockAt(self: MachineFunction, code_point: codegen.Index) ?MachBlock {
+    const block_id = std.sort.binarySearch(
+        BlockHeader,
+        code_point,
+        self.block_headers,
+        void{},
+        blockHeadersCompareFn,
+    ) orelse return null;
+
+    const header = self.block_headers.items[block_id];
+
+    return MachBlock{
+        .id = block_id,
+        .start = header.start,
+        .insts = self.insts[header.start..header.end],
+    };
+}
+
+// maybe use a structure called CodePoint
+pub fn getInstsFrom(self: MachineFunction, from: codegen.CodePoint, to: codegen.CodePoint) []const MachineInst {
+    return self.insts[from.toArrayIndex()..to.toArrayIndex()];
 }
 
 pub fn blockIter(self: *const MachineFunction) BlockIter {
