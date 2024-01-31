@@ -145,6 +145,7 @@ pub const LiveRange = struct {
     live_interval: *LiveInterval,
     uses: []const codegen.CodePoint,
     spill_cost: usize,
+    vreg: VirtualReg,
 
     split_count: u8 = 0,
     evicted_count: u8 = 0,
@@ -167,15 +168,11 @@ pub const LiveRange = struct {
     }
 
     pub fn isMinimal(self: LiveRange) bool {
-        return std.meta.eql(self.start.getNextInst(), self.end);
+        return std.meta.eql(self.start.getLate(), self.end);
     }
 
     pub fn class(self: LiveRange) RegClass {
         return self.live_interval.vreg.class;
-    }
-
-    pub fn vreg(self: LiveRange) VirtualReg {
-        return self.live_interval.vreg;
     }
 
     pub fn preg(self: LiveRange) ?PhysicalReg {
@@ -183,13 +180,23 @@ pub const LiveRange = struct {
             return allocation.preg;
         } else return null;
     }
+
+    pub fn constraints(self: LiveRange) LocationConstraint {
+        return self.live_interval.constraints;
+    }
+
+    pub fn spillable(self: LiveRange) bool {
+        return switch (self.constraints()) {
+            .none, .stack, .reuse => true,
+            .fixed_reg, .phys_reg => false,
+        };
+    }
 };
 
 pub const LiveInterval = struct {
     ranges: []const *LiveRange,
     constraints: LocationConstraint,
     allocation: ?Allocation,
-    vreg: VirtualReg,
 };
 
 pub fn rangesIntersect(a: LiveRange, start: usize, end: usize) bool {

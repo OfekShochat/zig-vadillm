@@ -70,24 +70,22 @@ pub fn run(self: *Self, live_ranges: []const *regalloc.LiveRange) !?regalloc.Out
     try self.queue.addSlice(live_ranges);
 
     while (self.queue.removeOrNull()) |live_range| {
-        // std.debug.print("Trying to assign {}\n", .{live_range});
         if (try self.tryAssignMightEvict(live_range)) |best_preg| {
-            // std.debug.print("succeeded ({}).\n", .{best_preg});
             try self.assignPregToLiveInterval(live_range.live_interval, best_preg);
             continue;
         }
 
         const split = try self.trySplitAndRequeue(live_range);
 
-        if (!split or live_range.evicted_count > 1) {
-            std.debug.print("spilled {} {}-{}\n", .{ live_range.vreg().index, live_range.start, live_range.end });
+        if (live_range.spillable() and (!split or live_range.evicted_count > 1)) {
+            std.debug.print("spilled {} {}-{}\n", .{ live_range.vreg.index, live_range.start, live_range.end });
             try self.spill(live_range);
         }
     }
 
     const allocations = try self.calculateAllocations();
     for (allocations) |allocated| {
-        std.debug.print("{}: {}-{} {any}\n", .{ allocated.vreg().index, allocated.start, allocated.end, allocated.live_interval.allocation });
+        std.debug.print("{}: {}-{} {any}\n", .{ allocated.vreg.index, allocated.start, allocated.end, allocated.live_interval.allocation });
     }
 
     return null;
@@ -116,7 +114,7 @@ fn spill(self: *Self, live_range: *regalloc.LiveRange) !void {
 }
 
 fn assignPregToLiveInterval(self: *Self, live_interval: *regalloc.LiveInterval, preg: regalloc.PhysicalReg) !void {
-    var live_union = self.live_unions.getPtrAssertContains(live_interval.vreg.class);
+    var live_union = self.live_unions.getPtrAssertContains(live_interval.ranges[0].vreg.class); // The class should be the same.
     for (live_interval.ranges) |range| {
         try live_union.insert(range);
     }
@@ -130,12 +128,12 @@ fn tryAssignMightEvict(self: *Self, live_range: *regalloc.LiveRange) !?regalloc.
 
     try interferences.ensureTotalCapacity(4);
 
-    var live_union = self.live_unions.getPtrAssertContains(live_range.vreg().class);
+    var live_union = self.live_unions.getPtrAssertContains(live_range.vreg.class);
     try live_union.search(live_range, &interferences);
 
     var avail_pregs = std.AutoArrayHashMap(regalloc.PhysicalReg, bool).init(self.allocator);
 
-    for (self.abi.getPregsByRegClass(live_range.vreg().class).?) |preg| {
+    for (self.abi.getPregsByRegClass(live_range.vreg.class).?) |preg| {
         try avail_pregs.put(preg, true);
     }
 
@@ -161,7 +159,29 @@ fn tryAssignMightEvict(self: *Self, live_range: *regalloc.LiveRange) !?regalloc.
         }
     }
 
-    return self.tryEvict(live_range, live_union, interferences.items);
+    if (live_range.constraints() == .fixed_reg) {
+        try self.evictToMakeRoomFor(live_range.preg().?, live_union, interferences.items);
+        return live_range.preg();
+    } else {
+        return self.tryEvict(live_range, live_union, interferences.items);
+    }
+}
+
+fn evictToMakeRoomFor(
+    self: *Self,
+    preg: regalloc.PhysicalReg,
+    live_union: *IntervalTree(*regalloc.LiveRange),
+    interferences: []const *regalloc.LiveRange,
+) !void {
+    for (interferences) |interference| {
+        if (std.meta.eql(interference.preg(), preg)) {
+            interference.evicted_count += 1;
+            interference.live_interval.allocation = null;
+
+            try live_union.delete(interference);
+            try self.queue.add(interference);
+        }
+    }
 }
 
 fn tryEvict(
@@ -177,6 +197,7 @@ fn tryEvict(
     const EvictionCostDetails = struct {
         total_spill_cost: usize,
         interference_cost: usize,
+        allocatable: bool,
     };
 
     // 1. Calculate costs and, if a hint wasn't found,
@@ -189,8 +210,13 @@ fn tryEvict(
     for (interferences) |interference| {
         var details = preg_map.get(
             interference.preg().?,
-        ) orelse EvictionCostDetails{ .total_spill_cost = 0, .interference_cost = 0 };
+        ) orelse EvictionCostDetails{
+            .total_spill_cost = 0,
+            .interference_cost = 0,
+            .allocatable = false,
+        };
 
+        details.allocatable = details.allocatable and interference.constraints() != .fixed_reg;
         details.total_spill_cost += interference.spill_cost;
         details.interference_cost += @min(live_range.rawEnd(), interference.rawEnd()) - @max(live_range.rawStart(), interference.rawStart());
 
@@ -207,6 +233,8 @@ fn tryEvict(
     } else {
         var iter = preg_map.iterator();
         while (iter.next()) |entry| {
+            if (!entry.value_ptr.allocatable) continue;
+
             const cost = entry.value_ptr.total_spill_cost * spill_cost_weight +
                 entry.value_ptr.interference_cost * interference_cost_weight;
 
@@ -223,14 +251,7 @@ fn tryEvict(
     }
 
     // 2. Evict all `interferences` of the chosen preg.
-    for (interferences) |interference| {
-        if (std.meta.eql(interference.preg(), chosen_preg)) {
-            interference.evicted_count += 1;
-
-            try live_union.delete(interference);
-            try self.queue.add(interference);
-        }
-    }
+    try self.evictToMakeRoomFor(chosen_preg.?, live_union, interferences);
 
     return chosen_preg;
 }
@@ -241,7 +262,7 @@ fn trySplitAndRequeue(self: *Self, live_range: *regalloc.LiveRange) !bool {
 
     try interferences.ensureTotalCapacity(4);
 
-    var live_union = self.live_unions.getPtrAssertContains(live_range.vreg().class);
+    var live_union = self.live_unions.getPtrAssertContains(live_range.vreg.class);
     try live_union.search(live_range, &interferences);
 
     std.debug.assert(interferences.items.len > 0);
@@ -313,20 +334,22 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
     if (found_range.uses.len == 0) {
         split_ranges[0] = .{
             .start = found_range.start,
-            .end = split_at,
+            .end = split_at.getPrevInst().getLate(),
             .live_interval = &split_intervals[0],
-            .spill_cost = 0,
+            .spill_cost = 10,
             .uses = &.{},
             .split_count = found_range.split_count + 1,
+            .vreg = found_range.vreg,
         };
 
         split_ranges[1] = .{
-            .start = split_at.getNextInst(),
+            .start = split_at,
             .end = found_range.end,
             .live_interval = &split_intervals[1],
-            .spill_cost = 0,
+            .spill_cost = 10,
             .uses = &.{},
             .split_count = found_range.split_count + 1,
+            .vreg = found_range.vreg,
         };
     } else {
         var low: usize = 0;
@@ -345,22 +368,26 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
             }
         }
 
+        const uses_split_idx = if (found_range.uses[low].isAfter(split_at)) low else low + 1;
+
         split_ranges[0] = .{
             .start = found_range.start,
-            .end = split_at,
+            .end = split_at.getLate(),
             .live_interval = &split_intervals[0],
-            .spill_cost = 0,
-            .uses = found_range.uses[0 .. low + 1],
+            .spill_cost = 10,
+            .uses = found_range.uses[0..uses_split_idx],
             .split_count = found_range.split_count + 1,
+            .vreg = found_range.vreg,
         };
 
         split_ranges[1] = .{
             .start = split_at.getNextInst(),
             .end = found_range.end,
             .live_interval = &split_intervals[1],
-            .spill_cost = 0,
-            .uses = found_range.uses[low + 1 ..],
+            .spill_cost = 10,
+            .uses = found_range.uses[uses_split_idx..],
             .split_count = found_range.split_count + 1,
+            .vreg = found_range.vreg,
         };
     }
 
@@ -371,18 +398,17 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
         .ranges = left_ranges,
         .constraints = live_interval.constraints,
         .allocation = null,
-        .vreg = live_interval.vreg,
     };
 
     split_intervals[1] = .{
         .ranges = right_ranges,
         .constraints = live_interval.constraints,
         .allocation = null,
-        .vreg = live_interval.vreg,
     };
+
     // std.debug.print("{}-{} {}-{}\n", .{ split_ranges[0].start, split_ranges[0].end, split_ranges[1].start, split_ranges[1].end });
 
-    var live_union = self.live_unions.getPtrAssertContains(live_interval.vreg.class);
+    var live_union = self.live_unions.getPtrAssertContains(live_interval.ranges[0].vreg.class);
     live_union.delete(found_range) catch {}; // error.NoSuchKey might be expected here.
 
     self.allocator.free(live_interval.ranges);
@@ -405,7 +431,7 @@ fn findNextUse(self: Self, from: codegen.CodePoint, live_range: *regalloc.LiveRa
         try inst.getAllocatableOperands(&operands);
 
         for (operands.items) |operand| {
-            if (operand.accessType() == .use and operand.vregIndex() == live_range.vreg().index) {
+            if (operand.accessType() == .use and operand.vregIndex() == live_range.vreg.index) {
                 return switch (operand.operandUse()) {
                     .early => current.getEarly(),
                     .late => current.getLate(),
@@ -440,6 +466,7 @@ test "poop" {
             .int_pregs = &.{
                 regalloc.PhysicalReg{ .class = .int, .encoding = 0 },
                 regalloc.PhysicalReg{ .class = .int, .encoding = 1 },
+                regalloc.PhysicalReg{ .class = .int, .encoding = 2 },
             },
             .float_pregs = null,
             .vector_pregs = null,
@@ -457,6 +484,7 @@ test "poop" {
             .end = .{ .point = 30 },
             .spill_cost = 1,
             .live_interval = &intervals[0],
+            .vreg = regalloc.VirtualReg{ .class = .int, .index = 0 },
             .uses = &.{ .{ .point = 15 }, .{ .point = 30 } },
         },
         .{
@@ -464,6 +492,7 @@ test "poop" {
             .end = .{ .point = 31 },
             .spill_cost = 3,
             .live_interval = &intervals[1],
+            .vreg = regalloc.VirtualReg{ .class = .int, .index = 1 },
             .uses = &.{ .{ .point = 21 }, .{ .point = 31 } },
         },
         .{
@@ -471,6 +500,7 @@ test "poop" {
             .end = .{ .point = 22 },
             .spill_cost = 3,
             .live_interval = &intervals[2],
+            .vreg = regalloc.VirtualReg{ .class = .int, .index = 2 },
             .uses = &.{ .{ .point = 4 }, .{ .point = 22 } },
         },
     };
@@ -484,9 +514,8 @@ test "poop" {
 
     intervals[0] = .{
         .ranges = live_ranges_thing,
-        .constraints = .none,
-        .allocation = null,
-        .vreg = regalloc.VirtualReg{ .class = .int, .index = 0 },
+        .constraints = .{ .fixed_reg = .{ .class = .int, .encoding = 0 } },
+        .allocation = .{ .preg = .{ .class = .int, .encoding = 0 } },
     };
 
     live_ranges_thing = try arena.allocator().alloc(*regalloc.LiveRange, 1);
@@ -496,7 +525,6 @@ test "poop" {
         .ranges = live_ranges_thing,
         .constraints = .none,
         .allocation = null,
-        .vreg = regalloc.VirtualReg{ .class = .int, .index = 1 },
     };
 
     live_ranges_thing = try arena.allocator().alloc(*regalloc.LiveRange, 1);
@@ -506,7 +534,6 @@ test "poop" {
         .ranges = live_ranges_thing,
         .constraints = .none,
         .allocation = null,
-        .vreg = regalloc.VirtualReg{ .class = .int, .index = 2 },
     };
 
     _ = reg_alloc.run(ranges.items) catch |e| {
