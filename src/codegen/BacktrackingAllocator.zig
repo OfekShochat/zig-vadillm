@@ -70,6 +70,12 @@ pub fn run(self: *Self, live_ranges: []const *regalloc.LiveRange) !?regalloc.Out
     try self.queue.addSlice(live_ranges);
 
     while (self.queue.removeOrNull()) |live_range| {
+        if (live_range.constraints() == .stack) {
+            std.debug.print("spilled {} {}-{}\n", .{ live_range.vreg.index, live_range.start, live_range.end });
+            try self.spill(live_range);
+            continue;
+        }
+
         if (try self.tryAssignMightEvict(live_range)) |best_preg| {
             try self.assignPregToLiveInterval(live_range.live_interval, best_preg);
             continue;
@@ -148,7 +154,7 @@ fn tryAssignMightEvict(self: *Self, live_range: *regalloc.LiveRange) !?regalloc.
         if (avail_pregs.get(hint).?) {
             return hint;
         }
-    } else {
+    } else if (live_range.constraints() != .fixed_reg) {
         // If there's no hint, any preg that is available
         // for the whole live-range is great.
         var iter = avail_pregs.iterator();
@@ -157,14 +163,13 @@ fn tryAssignMightEvict(self: *Self, live_range: *regalloc.LiveRange) !?regalloc.
                 return entry.key_ptr.*;
             }
         }
+    } else {
+        try self.evictToMakeRoomFor(live_range.constraints().fixed_reg, live_union, interferences.items);
+        return live_range.constraints().fixed_reg;
     }
 
-    if (live_range.constraints() == .fixed_reg) {
-        try self.evictToMakeRoomFor(live_range.preg().?, live_union, interferences.items);
-        return live_range.preg();
-    } else {
-        return self.tryEvict(live_range, live_union, interferences.items);
-    }
+    std.debug.print("{}\n", .{live_range});
+    return self.tryEvict(live_range, live_union, interferences.items);
 }
 
 fn evictToMakeRoomFor(
@@ -175,6 +180,9 @@ fn evictToMakeRoomFor(
 ) !void {
     for (interferences) |interference| {
         if (std.meta.eql(interference.preg(), preg)) {
+            // TODO: print a backtrace.
+            if (interference.constraints() == .fixed_reg) @panic("Constraints don't make sense.");
+
             interference.evicted_count += 1;
             interference.live_interval.allocation = null;
 
@@ -465,8 +473,8 @@ test "poop" {
         Abi{
             .int_pregs = &.{
                 regalloc.PhysicalReg{ .class = .int, .encoding = 0 },
-                regalloc.PhysicalReg{ .class = .int, .encoding = 1 },
-                regalloc.PhysicalReg{ .class = .int, .encoding = 2 },
+                // regalloc.PhysicalReg{ .class = .int, .encoding = 1 },
+                // regalloc.PhysicalReg{ .class = .int, .encoding = 2 },
             },
             .float_pregs = null,
             .vector_pregs = null,
@@ -515,7 +523,7 @@ test "poop" {
     intervals[0] = .{
         .ranges = live_ranges_thing,
         .constraints = .{ .fixed_reg = .{ .class = .int, .encoding = 0 } },
-        .allocation = .{ .preg = .{ .class = .int, .encoding = 0 } },
+        .allocation = null,
     };
 
     live_ranges_thing = try arena.allocator().alloc(*regalloc.LiveRange, 1);
@@ -523,7 +531,7 @@ test "poop" {
 
     intervals[1] = .{
         .ranges = live_ranges_thing,
-        .constraints = .none,
+        .constraints = .stack,
         .allocation = null,
     };
 
