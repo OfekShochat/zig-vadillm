@@ -32,14 +32,16 @@ fn priorityCompare(_: void, lhs: *regalloc.LiveRange, rhs: *regalloc.LiveRange) 
 // }
 
 queue: std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare),
-second_cance: std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare),
+// second_chance: std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare),
 func: *const MachineFunction,
 
 // int, float, vec
 live_unions: std.EnumMap(regalloc.RegClass, IntervalTree(*regalloc.LiveRange)),
 abi: Abi,
 allocator: std.mem.Allocator,
+spilled: std.ArrayList(*regalloc.LiveRange),
 
+// `allocator` should be in an arena; this allocator is very sloppy in terms of memory management.
 pub fn init(allocator: std.mem.Allocator, abi: Abi, func: *const MachineFunction) Self {
     var live_unions = std.EnumMap(regalloc.RegClass, IntervalTree(*regalloc.LiveRange)){};
 
@@ -54,10 +56,11 @@ pub fn init(allocator: std.mem.Allocator, abi: Abi, func: *const MachineFunction
     return Self{
         .func = func,
         .queue = std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare).init(allocator, void{}),
-        .second_cance = std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare).init(allocator, void{}),
+        // .second_cance = std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare).init(allocator, void{}),
         .live_unions = live_unions,
         .abi = abi,
         .allocator = allocator,
+        .spilled = std.ArrayList(*regalloc.LiveRange).init(allocator),
     };
 }
 
@@ -71,7 +74,6 @@ pub fn run(self: *Self, live_ranges: []const *regalloc.LiveRange) !?regalloc.Out
 
     while (self.queue.removeOrNull()) |live_range| {
         if (live_range.constraints() == .stack) {
-            std.debug.print("spilled {} {}-{}\n", .{ live_range.vreg.index, live_range.start, live_range.end });
             try self.spill(live_range);
             continue;
         }
@@ -83,8 +85,11 @@ pub fn run(self: *Self, live_ranges: []const *regalloc.LiveRange) !?regalloc.Out
 
         const split = try self.trySplitAndRequeue(live_range);
 
+        if (!live_range.spillable()) {
+            @panic("oh no");
+        }
+
         if (live_range.spillable() and (!split or live_range.evicted_count > 1)) {
-            std.debug.print("spilled {} {}-{}\n", .{ live_range.vreg.index, live_range.start, live_range.end });
             try self.spill(live_range);
         }
     }
@@ -108,15 +113,18 @@ fn calculateAllocations(self: *Self) ![]*const regalloc.LiveRange {
         try live_union.collect(&ranges);
     }
 
-    // for (self.spilled) |spilled_range| {
-    //     try ranges.append(spilled_range);
-    // }
+    for (self.spilled.items) |spilled_range| {
+        try ranges.append(spilled_range);
+    }
 
     return ranges.toOwnedSlice();
 }
 
 fn spill(self: *Self, live_range: *regalloc.LiveRange) !void {
-    try self.second_cance.add(live_range);
+    // TODO: Second-chance queue?
+
+    live_range.live_interval.allocation = .stack;
+    try self.spilled.append(live_range);
 }
 
 fn assignPregToLiveInterval(self: *Self, live_interval: *regalloc.LiveInterval, preg: regalloc.PhysicalReg) !void {
@@ -168,7 +176,6 @@ fn tryAssignMightEvict(self: *Self, live_range: *regalloc.LiveRange) !?regalloc.
         return live_range.constraints().fixed_reg;
     }
 
-    std.debug.print("{}\n", .{live_range});
     return self.tryEvict(live_range, live_union, interferences.items);
 }
 
@@ -305,7 +312,6 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
     var split_intervals = try self.allocator.alloc(regalloc.LiveInterval, 2);
 
     var split_ranges = try self.allocator.alloc(regalloc.LiveRange, 2);
-    // std.debug.print("\nsplitting {any} at {}\n", .{ live_interval.ranges, at });
 
     var found_idx: usize = undefined;
 
@@ -318,6 +324,8 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
 
     const found_range = live_interval.ranges[found_idx];
 
+    // std.debug.print("splitting {any} {} at {}\n", .{ live_interval.ranges, found_range, at });
+
     if (found_range.isMinimal()) {
         return null;
     }
@@ -329,9 +337,7 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
         } else {
             break :blk found_range.uses[0];
         }
-    } else at;
-
-    // std.debug.print("Splitting at {}\n", .{split_at});
+    } else at.getPrevInst();
 
     var left_ranges = try self.allocator.alloc(*regalloc.LiveRange, found_idx + 1);
     var right_ranges = try self.allocator.alloc(*regalloc.LiveRange, live_interval.ranges.len - found_idx);
@@ -414,7 +420,12 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
         .allocation = null,
     };
 
-    // std.debug.print("{}-{} {}-{}\n", .{ split_ranges[0].start, split_ranges[0].end, split_ranges[1].start, split_ranges[1].end });
+    // std.debug.print("{}-{} {}-{}\n", .{
+    //     split_ranges[0].rawStart(),
+    //     split_ranges[0].rawEnd(),
+    //     split_ranges[1].rawStart(),
+    //     split_ranges[1].rawEnd(),
+    // });
 
     var live_union = self.live_unions.getPtrAssertContains(live_interval.ranges[0].vreg.class);
     live_union.delete(found_range) catch {}; // error.NoSuchKey might be expected here.
@@ -531,7 +542,7 @@ test "poop" {
 
     intervals[1] = .{
         .ranges = live_ranges_thing,
-        .constraints = .stack,
+        .constraints = .none,
         .allocation = null,
     };
 
@@ -540,7 +551,7 @@ test "poop" {
 
     intervals[2] = .{
         .ranges = live_ranges_thing,
-        .constraints = .none,
+        .constraints = .stack,
         .allocation = null,
     };
 

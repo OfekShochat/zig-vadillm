@@ -168,7 +168,7 @@ pub const LiveRange = struct {
     }
 
     pub fn isMinimal(self: LiveRange) bool {
-        return std.meta.eql(self.start.getLate(), self.end);
+        return std.meta.eql(self.start.getLate(), self.end) or std.meta.eql(self.start.getNextInst(), self.end);
     }
 
     pub fn class(self: LiveRange) RegClass {
