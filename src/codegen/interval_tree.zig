@@ -593,6 +593,7 @@ test "interval tree bench/fuzzing" {
     const RndGen = std.rand.DefaultPrng;
 
     const allocator = std.testing.allocator;
+    const max_end = 10000;
     const inserts_num = 1000;
     const queries_num = 500;
     const seed: ?u64 = null;
@@ -609,7 +610,9 @@ test "interval tree bench/fuzzing" {
     rnd.fill(std.mem.sliceAsBytes(&queries));
 
     for (&inserts) |*insert| {
-        insert.start %= insert.end;
+        // Make insertions more realistic.
+        insert.end %= max_end;
+        insert.start %= insert.end + 1;
     }
 
     for (&queries) |*query| {

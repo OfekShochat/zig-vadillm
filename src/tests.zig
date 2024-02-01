@@ -18,4 +18,6 @@ comptime {
     _ = @import("ir.zig");
     _ = @import("egg.zig");
     _ = @import("codegen.zig");
+
+    _ = @import("codegen/BacktrackingAllocator.zig");
 }

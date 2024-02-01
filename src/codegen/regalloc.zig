@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const codegen = @import("codegen.zig");
+const Abi = @import("Abi.zig");
 
 pub const RegClass = enum(u2) {
     int,
@@ -9,20 +10,231 @@ pub const RegClass = enum(u2) {
     vector,
 };
 
+pub const RegAllocError = error{
+    ContradictingConstraints,
+};
+
+pub const RegisterAllocator = struct {
+    pub const VTable = struct {
+        run: *const fn (self: *anyopaque, []const *LiveRange) (RegAllocError || std.mem.Allocator.Error)!Solution,
+        getIntermediateSolution: *const fn (self: *anyopaque) std.mem.Allocator.Error!Solution,
+    };
+
+    vptr: *anyopaque,
+    vtable: VTable,
+
+    pub fn run(self: *RegisterAllocator, allocator: std.mem.Allocator, abi: Abi, live_ranges: []const *LiveRange) !Solution {
+        if (self.vtable.run(self.vptr, live_ranges)) |output| {
+            std.log.debug("regalloc found a solution:", .{});
+            try output.visualize(allocator, abi, std.io.getStdErr());
+            return output;
+        } else |err| {
+            std.log.debug("regalloc encountered an error: {}.", .{err});
+            const inter_out = try self.vtable.getIntermediateSolution(self.vptr);
+            try inter_out.visualize(allocator, abi, std.io.getStdErr());
+            return err;
+        }
+    }
+};
+
 pub const VirtualReg = struct {
     class: RegClass,
     index: u32,
+
+    pub fn format(
+        self: VirtualReg,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        const class_str = switch (self.class) {
+            .int => "i",
+            .float => "f",
+            .vector => "v",
+        };
+
+        return writer.print("v{}{s}", .{ self.index, class_str });
+    }
 };
 
-pub const Output = struct {
-    allocations: []const Allocation,
+pub const SolutionVisualizer = struct {
+    max_end: usize,
+    max_width: usize,
+    ranges: std.ArrayListUnmanaged(LiveRange),
+    abi: Abi,
+    arena: std.heap.ArenaAllocator,
+
+    pub fn init(allocator: std.mem.Allocator, abi: Abi) SolutionVisualizer {
+        const arena = std.heap.ArenaAllocator.init(allocator);
+
+        // arena fucks everything up.
+        return SolutionVisualizer{
+            .max_end = 0,
+            .max_width = 0,
+            .arena = arena,
+            .ranges = std.ArrayListUnmanaged(LiveRange){},
+            .abi = abi,
+        };
+    }
+
+    pub fn add(self: *SolutionVisualizer, range: LiveRange) !void {
+        if (range.preg() == null) {
+            self.max_width += 1;
+        }
+
+        self.max_end = @max(range.end.point, self.max_end);
+        try self.ranges.append(self.arena.allocator(), range);
+    }
+
+    const Context = struct {
+        row_buf: []u8,
+        vis: *SolutionVisualizer,
+        active: *std.ArrayList(LiveRange),
+        pregs: []const PhysicalReg,
+        offsets: std.AutoHashMap(PhysicalReg, usize),
+
+        // fn retireActive(self: Context)
+    };
+
+    pub fn format(
+        self: *SolutionVisualizer,
+        writer: anytype,
+        allocator: std.mem.Allocator,
+        row_buf: []u8,
+        pregs: []const PhysicalReg,
+        active: *std.ArrayList(LiveRange),
+        offsets: std.AutoHashMap(PhysicalReg, usize),
+    ) !void {
+        @memset(row_buf, ' ');
+
+        for (pregs, 0..) |preg, i| {
+            _ = try std.fmt.bufPrint(row_buf[i * 5 ..], "{}", .{preg});
+        }
+
+        row_buf[row_buf.len - 1] = '\n';
+        try writer.writeAll(row_buf);
+
+        var active_stack = std.AutoHashMap(VirtualReg, usize).init(allocator);
+        defer active_stack.deinit();
+
+        var step: usize = 0;
+
+        while (self.ranges.items.len > 0 or active.items.len > 0) : (step += 1) {
+            @memset(row_buf, ' ');
+
+            var i: usize = 0;
+            while (i < active.items.len) {
+                if (step > active.items[i].end.point) {
+                    if (active.items[i].preg() == null) {
+                        _ = active_stack.remove(active.items[i].vreg);
+                    }
+
+                    _ = active.orderedRemove(i);
+                } else {
+                    i += 1;
+                }
+            }
+
+            while (self.ranges.popOrNull()) |range| {
+                if (range.rawStart() <= step) {
+                    if (range.preg()) |preg| {
+                        _ = try std.fmt.bufPrint(row_buf[offsets.get(preg).?..], "{}", .{range.vreg});
+                    }
+
+                    try active.append(range);
+                } else {
+                    try self.ranges.append(self.arena.allocator(), range);
+                    break;
+                }
+            }
+
+            var stack_offset = pregs.len * 4;
+            for (active.items) |active_range| {
+                if (active_range.rawStart() == step) {
+                    if (active_range.preg() == null) {
+                        _ = try std.fmt.bufPrint(row_buf[stack_offset..], "{}", .{active_range.vreg});
+                        try active_stack.put(active_range.vreg, stack_offset);
+                        stack_offset += 4;
+                    }
+                    continue;
+                }
+
+                if (active_range.preg()) |preg| {
+                    row_buf[offsets.get(preg).? + 1] = '|';
+                } else {
+                    const ofst = active_stack.get(active_range.vreg).?;
+                    row_buf[ofst + 1] = '|';
+                    stack_offset = @max(ofst, stack_offset) + 4;
+                }
+            }
+
+            row_buf[row_buf.len - 1] = '\n';
+            try writer.writeAll(row_buf);
+        }
+    }
+
+    pub fn print(self: *SolutionVisualizer, writer: anytype) !void {
+        const allocator = self.arena.allocator();
+
+        const pregs = try self.abi.getAllPregs(allocator);
+        self.max_width += pregs.len;
+
+        var offsets = std.AutoHashMap(PhysicalReg, usize).init(allocator);
+
+        for (pregs, 0..) |preg, i| {
+            try offsets.put(preg, i * 5);
+        }
+
+        std.sort.block(LiveRange, self.ranges.items, void{}, LiveRange.lessThan);
+        std.mem.reverse(LiveRange, self.ranges.items);
+
+        var active = std.ArrayList(LiveRange).init(allocator);
+
+        try active.ensureTotalCapacity(self.max_width);
+
+        return self.format(writer, allocator, try allocator.alloc(u8, self.max_width * 5), pregs, &active, offsets);
+    }
+};
+
+pub const Solution = struct {
+    allocations: []const LiveRange,
     stitches: Stitch,
+
+    pub fn deinit(self: *Solution, allocator: std.mem.Allocator) void {
+        allocator.free(self.allocations);
+    }
+
+    pub fn visualize(self: Solution, allocator: std.mem.Allocator, abi: Abi, writer: anytype) !void {
+        var visualizer = SolutionVisualizer.init(allocator, abi);
+
+        for (self.allocations) |range| {
+            try visualizer.add(range);
+        }
+
+        try visualizer.print(writer);
+        visualizer.arena.deinit();
+    }
 };
 
 pub const PhysicalReg = struct {
     class: RegClass,
     /// the unique encoding of a register. should fit into 7 bits.
     encoding: u7,
+
+    pub fn format(
+        self: PhysicalReg,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        const class_str = switch (self.class) {
+            .int => "i",
+            .float => "f",
+            .vector => "v",
+        };
+
+        return writer.print("p{}{s}", .{ self.encoding, class_str });
+    }
 };
 
 pub const Register = union(enum) {
@@ -157,10 +369,21 @@ pub const LiveRange = struct {
     }
 
     pub fn compareFn(self: LiveRange, other: LiveRange) std.math.Order {
-        switch (self.start.compareFn(other)) {
+        return switch (self.start.compareFn(other.start)) {
             .eq => self.end.compareFn(other.end),
             else => |e| e,
-        }
+        };
+    }
+
+    pub fn compareFnConst(_: void, self: *const LiveRange, other: *const LiveRange) std.math.Order {
+        return switch (self.start.compareFn(other.start)) {
+            .eq => self.end.compareFn(other.end),
+            else => |e| e,
+        };
+    }
+
+    pub fn lessThan(_: void, self: LiveRange, other: LiveRange) bool {
+        return self.compareFn(other) == .lt;
     }
 
     pub fn rawEnd(self: LiveRange) usize {
@@ -177,7 +400,9 @@ pub const LiveRange = struct {
 
     pub fn preg(self: LiveRange) ?PhysicalReg {
         if (self.live_interval.allocation) |allocation| {
-            return allocation.preg;
+            if (allocation == .preg) {
+                return allocation.preg;
+            } else return null;
         } else return null;
     }
 

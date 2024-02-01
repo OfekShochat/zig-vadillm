@@ -12,6 +12,8 @@ const hint_weight = 20;
 const spill_cost_weight = 2;
 const interference_cost_weight = 3;
 
+const Error = regalloc.RegAllocError || std.mem.Allocator.Error;
+
 fn priorityCompare(_: void, lhs: *regalloc.LiveRange, rhs: *regalloc.LiveRange) std.math.Order {
     if (lhs.spill_cost > rhs.spill_cost) {
         return .lt;
@@ -69,7 +71,22 @@ pub fn deinit(self: *Self) void {
     self.live_unions.deinit();
 }
 
-pub fn run(self: *Self, live_ranges: []const *regalloc.LiveRange) !?regalloc.Output {
+pub fn registerAllocator(self: *Self) regalloc.RegisterAllocator {
+    return regalloc.RegisterAllocator{
+        .vptr = self,
+        .vtable = .{
+            .run = runInterface,
+            .getIntermediateSolution = getIntermediateSolution,
+        },
+    };
+}
+
+pub fn runInterface(ctx: *anyopaque, live_ranges: []const *regalloc.LiveRange) (regalloc.RegAllocError || std.mem.Allocator.Error)!regalloc.Solution {
+    const self: *Self = @ptrCast(@alignCast(ctx));
+    return self.run(live_ranges);
+}
+
+pub fn run(self: *Self, live_ranges: []const *regalloc.LiveRange) (regalloc.RegAllocError || std.mem.Allocator.Error)!regalloc.Solution {
     try self.queue.addSlice(live_ranges);
 
     while (self.queue.removeOrNull()) |live_range| {
@@ -85,11 +102,9 @@ pub fn run(self: *Self, live_ranges: []const *regalloc.LiveRange) !?regalloc.Out
 
         const split = try self.trySplitAndRequeue(live_range);
 
-        if (!live_range.spillable()) {
-            @panic("oh no");
-        }
+        if (!live_range.spillable()) return error.ContradictingConstraints;
 
-        if (live_range.spillable() and (!split or live_range.evicted_count > 1)) {
+        if (!split or live_range.evicted_count > 1) {
             try self.spill(live_range);
         }
     }
@@ -99,51 +114,65 @@ pub fn run(self: *Self, live_ranges: []const *regalloc.LiveRange) !?regalloc.Out
         std.debug.print("{}: {}-{} {any}\n", .{ allocated.vreg.index, allocated.start, allocated.end, allocated.live_interval.allocation });
     }
 
-    return null;
-    // return regalloc.Output{
-    //     .allocations = allocations,
-    //     // .stitches = try regalloc.calculateStitches(self.allocator, allocations),
-    // };
+    return regalloc.Solution{
+        .allocations = allocations,
+        .stitches = undefined,
+        // .stitches = try regalloc.calculateStitches(self.allocator, allocations),
+    };
 }
 
-fn calculateAllocations(self: *Self) ![]*const regalloc.LiveRange {
-    var ranges = std.ArrayList(*regalloc.LiveRange).init(self.allocator);
+pub fn getIntermediateSolution(ctx: *anyopaque) std.mem.Allocator.Error!regalloc.Solution {
+    const self: *Self = @ptrCast(@alignCast(ctx));
 
+    return .{
+        .allocations = try self.calculateAllocations(),
+        .stitches = undefined,
+    };
+}
+
+fn calculateAllocations(self: *Self) ![]regalloc.LiveRange {
+    var ranges = std.ArrayList(regalloc.LiveRange).init(self.allocator);
+
+    var used = std.ArrayList(*regalloc.LiveRange).init(self.allocator);
     for (self.live_unions.values) |live_union| {
-        try live_union.collect(&ranges);
+        try live_union.collect(&used);
+    }
+
+    for (used.items) |range| {
+        try ranges.append(range.*);
     }
 
     for (self.spilled.items) |spilled_range| {
-        try ranges.append(spilled_range);
+        try ranges.append(spilled_range.*);
     }
 
     return ranges.toOwnedSlice();
 }
 
-fn spill(self: *Self, live_range: *regalloc.LiveRange) !void {
+fn spill(self: *Self, live_range: *regalloc.LiveRange) Error!void {
     // TODO: Second-chance queue?
 
     live_range.live_interval.allocation = .stack;
     try self.spilled.append(live_range);
 }
 
-fn assignPregToLiveInterval(self: *Self, live_interval: *regalloc.LiveInterval, preg: regalloc.PhysicalReg) !void {
+fn assignPregToLiveInterval(self: *Self, live_interval: *regalloc.LiveInterval, preg: regalloc.PhysicalReg) Error!void {
     var live_union = self.live_unions.getPtrAssertContains(live_interval.ranges[0].vreg.class); // The class should be the same.
     for (live_interval.ranges) |range| {
-        try live_union.insert(range);
+        live_union.insert(range) catch return error.ContradictingConstraints;
     }
 
     live_interval.allocation = .{ .preg = preg };
 }
 
-fn tryAssignMightEvict(self: *Self, live_range: *regalloc.LiveRange) !?regalloc.PhysicalReg {
+fn tryAssignMightEvict(self: *Self, live_range: *regalloc.LiveRange) Error!?regalloc.PhysicalReg {
     var interferences = std.ArrayList(*regalloc.LiveRange).init(self.allocator);
     defer interferences.deinit();
 
     try interferences.ensureTotalCapacity(4);
 
     var live_union = self.live_unions.getPtrAssertContains(live_range.vreg.class);
-    try live_union.search(live_range, &interferences);
+    live_union.search(live_range, &interferences) catch {}; // error.NoSuchKey is completely OK here.
 
     var avail_pregs = std.AutoArrayHashMap(regalloc.PhysicalReg, bool).init(self.allocator);
 
@@ -188,12 +217,12 @@ fn evictToMakeRoomFor(
     for (interferences) |interference| {
         if (std.meta.eql(interference.preg(), preg)) {
             // TODO: print a backtrace.
-            if (interference.constraints() == .fixed_reg) @panic("Constraints don't make sense.");
+            if (interference.constraints() == .fixed_reg) return error.ContradictingConstraints;
 
             interference.evicted_count += 1;
             interference.live_interval.allocation = null;
 
-            try live_union.delete(interference);
+            live_union.delete(interference) catch @panic("`interferences` should exist in `live_union`.");
             try self.queue.add(interference);
         }
     }
@@ -320,7 +349,7 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
             found_idx = i;
             break;
         }
-    } else return error.AtNotIntersecting;
+    } else @panic("`at` has to intersect one of the ranges.");
 
     const found_range = live_interval.ranges[found_idx];
 
@@ -479,17 +508,19 @@ test "poop" {
         .num_virtual_regs = 3,
     };
 
+    const abi = Abi{
+        .int_pregs = &.{
+            regalloc.PhysicalReg{ .class = .int, .encoding = 0 },
+            // regalloc.PhysicalReg{ .class = .int, .encoding = 1 },
+            // regalloc.PhysicalReg{ .class = .int, .encoding = 2 },
+        },
+        .float_pregs = null,
+        .vector_pregs = null,
+    };
+
     var reg_alloc = Self.init(
         arena.allocator(),
-        Abi{
-            .int_pregs = &.{
-                regalloc.PhysicalReg{ .class = .int, .encoding = 0 },
-                // regalloc.PhysicalReg{ .class = .int, .encoding = 1 },
-                // regalloc.PhysicalReg{ .class = .int, .encoding = 2 },
-            },
-            .float_pregs = null,
-            .vector_pregs = null,
-        },
+        abi,
         &func,
     );
 
@@ -551,11 +582,11 @@ test "poop" {
 
     intervals[2] = .{
         .ranges = live_ranges_thing,
-        .constraints = .stack,
+        .constraints = .none,
         .allocation = null,
     };
 
-    _ = reg_alloc.run(ranges.items) catch |e| {
-        std.debug.print("\n\n{}\n\n", .{e});
-    };
+    std.debug.print("wtf\n", .{});
+    var reg = reg_alloc.registerAllocator();
+    _ = try reg.run(allocator, abi, ranges.items);
 }
