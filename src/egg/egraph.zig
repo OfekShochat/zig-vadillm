@@ -249,7 +249,6 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             _ = self.union_find.merge(a, b);
             try self.dirty_ids.append(a); // submit a pending enode to repair
 
-
             var eclass1 = self.eclasses.getPtr(a).?;
             var eclass2 = self.eclasses.getPtr(b).?;
 

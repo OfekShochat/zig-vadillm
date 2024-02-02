@@ -449,13 +449,6 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
         .allocation = null,
     };
 
-    // std.debug.print("{}-{} {}-{}\n", .{
-    //     split_ranges[0].rawStart(),
-    //     split_ranges[0].rawEnd(),
-    //     split_ranges[1].rawStart(),
-    //     split_ranges[1].rawEnd(),
-    // });
-
     var live_union = self.live_unions.getPtrAssertContains(live_interval.ranges[0].vreg.class);
     live_union.delete(found_range) catch {}; // error.NoSuchKey might be expected here.
 
@@ -464,6 +457,9 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
     // 2. Recalculate and normalize the spill costs.
     // split_ranges[0].spill_cost = recalculateSpillCostFor(split_ranges[0], self.func);
     // split_ranges[1].spill_cost = recalculateSpillCostFor(split_ranges[1], self.func);
+
+    split_ranges[0].spill_cost = found_range.spill_cost;
+    split_ranges[1].spill_cost = found_range.spill_cost;
 
     self.allocator.destroy(live_interval);
 
@@ -493,9 +489,6 @@ fn findNextUse(self: Self, from: codegen.CodePoint, live_range: *regalloc.LiveRa
     return null;
 }
 
-// this is not comparable to `live_range`'s cost, so I can't use it in the cost calc:
-// + interference_count_weight * entry.value_ptr.interference_count;
-
 test "poop" {
     const allocator = std.testing.allocator;
 
@@ -511,7 +504,7 @@ test "poop" {
     const abi = Abi{
         .int_pregs = &.{
             regalloc.PhysicalReg{ .class = .int, .encoding = 0 },
-            // regalloc.PhysicalReg{ .class = .int, .encoding = 1 },
+            regalloc.PhysicalReg{ .class = .int, .encoding = 1 },
             // regalloc.PhysicalReg{ .class = .int, .encoding = 2 },
         },
         .float_pregs = null,
@@ -540,7 +533,7 @@ test "poop" {
         .{
             .start = .{ .point = 20 },
             .end = .{ .point = 31 },
-            .spill_cost = 3,
+            .spill_cost = 10,
             .live_interval = &intervals[1],
             .vreg = regalloc.VirtualReg{ .class = .int, .index = 1 },
             .uses = &.{ .{ .point = 21 }, .{ .point = 31 } },
