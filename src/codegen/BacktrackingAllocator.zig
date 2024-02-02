@@ -586,7 +586,6 @@ test "poop" {
         .allocation = null,
     };
 
-    std.debug.print("wtf\n", .{});
     var reg = reg_alloc.registerAllocator();
     _ = try reg.run(allocator, abi, ranges.items);
 }

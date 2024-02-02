@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const egg = @import("../egg.zig");
+const egg = @import("egg.zig");
 const machine = @import("machine.zig");
 const UnionFind = egg.UnionFind;
 
@@ -63,7 +63,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
         allocator: std.mem.Allocator,
 
         comptime {
-            if (!std.meta.trait.is(.Union)(L)) {
+            if (@typeInfo(L) != .Union) {
                 @compileError("`L` has to be a union to qualify to be a Language.");
             }
         }
@@ -278,7 +278,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
             var iter = eclass.parents.iterator();
             while (iter.next()) |entry| {
-                var parent = entry.key_ptr;
+                const parent = entry.key_ptr;
 
                 std.debug.assert(self.memo.remove(parent.*));
                 self.canonicalize(parent);
@@ -293,7 +293,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
             iter = eclass.parents.iterator();
             while (iter.next()) |entry| {
-                var parent = entry.key_ptr;
+                const parent = entry.key_ptr;
                 self.canonicalize(parent);
 
                 if (visited_parents.get(parent.*)) |visited_parent| {
@@ -309,7 +309,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
         fn rebuild(self: *@This()) !void {
             while (self.dirty_ids.items.len > 0) {
-                var todo = try self.dirty_ids.toOwnedSlice();
+                const todo = try self.dirty_ids.toOwnedSlice();
                 for (todo) |eclass| {
                     try self.repair(self.find(eclass));
                 }
