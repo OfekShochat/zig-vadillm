@@ -69,7 +69,7 @@ pub fn blockDominates(self: DominatorTree, a: Index, b: Index) bool {
 
 fn findInitialIdom(self: *DominatorTree, preds: *const HashSet(Index), entry_ref: Index) ?Index {
     for (preds.iter()) |pred_ref| {
-        var pred = self.nodes.getPtr(pred_ref) orelse @panic("rpo ensures that all parents are visited before the child");
+        const pred = self.nodes.getPtr(pred_ref) orelse @panic("rpo ensures that all parents are visited before the child");
         if (pred.idom != null or pred_ref == entry_ref) {
             return pred_ref;
         }
@@ -81,7 +81,7 @@ fn findInitialIdom(self: *DominatorTree, preds: *const HashSet(Index), entry_ref
 fn updateDominators(self: *DominatorTree, current_block: Index, cfg: *const ControlFlowGraph) struct { val: Index, changed: bool } {
     var new_idom = self.nodes.get(current_block).?.idom orelse @panic("rpo ensures that at least one parent is visited before a child");
 
-    var preds = &cfg.get(current_block).?.preds;
+    const preds = &cfg.get(current_block).?.preds;
     for (preds.iter()) |pred| {
         std.debug.assert(self.nodes.contains(pred));
 
@@ -213,7 +213,7 @@ const types = @import("types.zig");
 const Instruction = @import("instructions.zig").Instruction;
 
 test "DominatorTree.simple" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     var func = Function.init(allocator, Signature{
         .ret = types.I32,
@@ -264,7 +264,7 @@ test "DominatorTree.simple" {
 }
 
 test "DominatorTree.loops" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     var func = Function.init(allocator, Signature{
         .ret = types.I32,

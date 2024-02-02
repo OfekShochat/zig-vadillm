@@ -17,7 +17,7 @@ worst_case_size: u32,
 
 pub const VTable = struct {
     getAllocatableOperands: *const fn (self: *anyopaque, *std.ArrayList(regalloc.Operand)) std.mem.Allocator.Error!void,
-// TODO:
+    // TODO:
     // regTypeForClass: *const fn (regalloc.RegClass) types.Type,
     getBlockCall: *const fn (self: *anyopaque) ?BlockCall,
     // fromBytes: *const fn (allocator: std.mem.Allocator, []const u8) error.ParseError!MachineInst,

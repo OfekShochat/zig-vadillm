@@ -1,5 +1,5 @@
 const std = @import("std");
-const egg = @import("../egg.zig");
+const egg = @import("egg.zig");
 
 pub const MatchResult = struct {
     root: egg.Id,
@@ -121,9 +121,10 @@ pub fn Machine(comptime L: type) type {
             nodes: []L,
 
             fn next(self: *EClassSearcher) ?[]const egg.Id {
-                for (self.nodes, 0..) |node, i| {
+                for (self.nodes, 0..) |*node, i| {
                     // TODO(ghostway): possible bug when len == 0
-                    if (node == self.op and node.getChildren().?.len == self.len) {
+                    // Shouldn't be an issue on a valid egraph and compilation.
+                    if (node.* == self.op and node.getChildren().len == self.len) {
                         self.nodes = self.nodes[i + 1 ..];
                         return node.getChildren();
                     }
@@ -206,7 +207,7 @@ pub fn Machine(comptime L: type) type {
                 switch (inst) {
                     .bind => |bind| {
                         const eclass = egraph.get(self.regs.items[bind.reg]).?;
-                        var binder = BacktrackingPoint{
+                        const binder = BacktrackingPoint{
                             .out = bind.out_reg,
                             .next = self.index,
                             .searcher = EClassSearcher{
@@ -224,7 +225,7 @@ pub fn Machine(comptime L: type) type {
                         const eclass = egraph.get(self.regs.items[check.reg]).?;
 
                         for (eclass.nodes.items) |node| {
-                            if (node == check.op and node.getChildren() == null) {
+                            if (node == check.op and node.getChildren().len == 0) {
                                 break;
                             }
                         } else {

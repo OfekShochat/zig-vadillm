@@ -24,6 +24,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // exe.addModule("prettytable", .{ .source_file = .{ .path = "external/prettytable/src/lib.zig" } });
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
@@ -59,6 +61,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // unit_tests.addAnonymousModule("prettytable", .{ .source_file = .{ .path = "external/prettytable/src/lib.zig" } });
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 

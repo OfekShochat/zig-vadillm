@@ -135,7 +135,7 @@ const types = @import("types.zig");
 const Instruction = @import("instructions.zig").Instruction;
 
 test "ControlFlowGraph" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     var func = Function.init(allocator, Signature{
         .ret = types.I32,

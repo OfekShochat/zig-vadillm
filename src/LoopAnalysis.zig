@@ -149,7 +149,7 @@ fn assignLoopLevels(self: *LoopAnalysis, allocator: std.mem.Allocator) !void {
             // starting at each backedge.
             while (stack.getLastOrNull()) |lp| {
                 if (self.loops.getPtr(lp).?.parent) |parent_ref| {
-                    var parent = self.loops.getPtr(parent_ref) orelse @panic("bad parent ref from `discoverLoopBlocks");
+                    const parent = self.loops.getPtr(parent_ref) orelse @panic("bad parent ref from `discoverLoopBlocks");
 
                     if (parent.level != INVALID_LOOP_LEVEL) {
                         // the current loop level is the parent's + 1
@@ -178,7 +178,7 @@ const HashSet = @import("hashset.zig").HashSet;
 test "loop analysis" {
     const types = @import("types.zig");
     const Instruction = @import("instructions.zig").Instruction;
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     var func = Function.init(allocator, Signature{
         .ret = types.I32,
