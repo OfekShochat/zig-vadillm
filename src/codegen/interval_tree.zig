@@ -237,6 +237,8 @@ pub fn IntervalTree(comptime T: type) type {
         pub fn insert(self: *Self, range: T) !void {
             var new_node = try self.arena.allocator().create(Node);
 
+            errdefer self.arena.allocator().destroy(new_node);
+
             new_node.* = Node{
                 .range = range,
                 .max_end = range.rawEnd(),
@@ -287,6 +289,7 @@ pub fn IntervalTree(comptime T: type) type {
                     @panic("shit.");
                 }
             }
+
             recalculateMaxEnd(new_node.parent);
         }
 

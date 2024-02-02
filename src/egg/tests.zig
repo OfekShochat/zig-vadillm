@@ -8,21 +8,21 @@ const ToyLanguage = union(enum) {
     mul: [2]egg.Id,
     constant: usize,
 
-    pub fn getChildren(self: *const ToyLanguage) ?[]const egg.Id {
+    pub fn getChildren(self: *const ToyLanguage) []const egg.Id {
         return switch (self.*) {
             .add => self.add[0..],
             .sub => self.sub[0..],
             .mul => self.mul[0..],
-            else => null,
+            else => &.{},
         };
     }
 
-    pub fn getMutableChildren(self: *ToyLanguage) ?[]egg.Id {
+    pub fn getMutableChildren(self: *ToyLanguage) []egg.Id {
         return switch (self.*) {
             .add => self.add[0..],
             .sub => self.sub[0..],
             .mul => self.mul[0..],
-            else => null,
+            else => &.{},
         };
     }
 };

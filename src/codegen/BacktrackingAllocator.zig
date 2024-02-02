@@ -504,7 +504,7 @@ test "poop" {
     const abi = Abi{
         .int_pregs = &.{
             regalloc.PhysicalReg{ .class = .int, .encoding = 0 },
-            regalloc.PhysicalReg{ .class = .int, .encoding = 1 },
+            // regalloc.PhysicalReg{ .class = .int, .encoding = 1 },
             // regalloc.PhysicalReg{ .class = .int, .encoding = 2 },
         },
         .float_pregs = null,

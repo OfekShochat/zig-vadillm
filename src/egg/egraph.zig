@@ -107,6 +107,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
         pub fn addEclass(self: *@This(), first_enode: L) !Id {
             var enode = first_enode;
+
             if (self.lookup(&enode)) |existing| {
                 return existing;
             }
@@ -118,11 +119,9 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
             const eclass = EClass{ .nodes = nodes, .ctx = .{} };
 
-            if (enode.getMutableChildren()) |children| {
-                for (children) |child| {
-                    var eclass_child = self.eclasses.getPtr(child) orelse @panic("a saved enode's child is invalid.");
-                    try eclass_child.parents.put(self.allocator, enode, id);
-                }
+            for (enode.getMutableChildren()) |child| {
+                var eclass_child = self.eclasses.getPtr(child) orelse @panic("a saved enode's child is invalid.");
+                try eclass_child.parents.put(self.allocator, enode, id);
             }
 
             try self.eclasses.put(id, eclass);
@@ -190,11 +189,11 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             for (subst_ast, 0..) |node, i| {
                 switch (node) {
                     .enode => |enode| {
-                        if (enode.getChildren()) |ast_children| {
+                        if (enode.getChildren().len > 0) {
                             var copied = enode;
 
                             // for each child, map its id to the actual egraph id
-                            for (copied.getMutableChildren().?, ast_children) |*child, ast_id| {
+                            for (copied.getMutableChildren(), enode.getChildren()) |*child, ast_id| {
                                 child.* = ids.items[ast_id];
                             }
 
@@ -234,10 +233,8 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
         /// updates enode in-place
         fn canonicalize(self: @This(), enode: *L) void {
-            if (enode.getMutableChildren()) |children| {
-                for (children) |*child| {
-                    child.* = self.find(child.*);
-                }
+            for (enode.getMutableChildren()) |*child| {
+                child.* = self.find(child.*);
             }
         }
 

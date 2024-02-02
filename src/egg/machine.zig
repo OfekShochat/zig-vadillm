@@ -124,7 +124,7 @@ pub fn Machine(comptime L: type) type {
                 for (self.nodes, 0..) |*node, i| {
                     // TODO(ghostway): possible bug when len == 0
                     // Shouldn't be an issue on a valid egraph and compilation.
-                    if (node.* == self.op and node.getChildren().?.len == self.len) {
+                    if (node.* == self.op and node.getChildren().len == self.len) {
                         self.nodes = self.nodes[i + 1 ..];
                         return node.getChildren();
                     }
@@ -225,7 +225,7 @@ pub fn Machine(comptime L: type) type {
                         const eclass = egraph.get(self.regs.items[check.reg]).?;
 
                         for (eclass.nodes.items) |node| {
-                            if (node == check.op and node.getChildren() == null) {
+                            if (node == check.op and node.getChildren().len == 0) {
                                 break;
                             }
                         } else {
