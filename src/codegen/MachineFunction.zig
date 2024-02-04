@@ -13,15 +13,15 @@ pub const BlockCall = struct {
 
 pub const MachBlock = struct {
     id: codegen.Index,
-    start: codegen.Index,
+    start: codegen.CodePoint,
     // params: []const regalloc.VirtualReg,
     insts: []const MachineInst,
     // succ_phis: []const BlockCall,
 };
 
 const BlockHeader = struct {
-    start: codegen.Index,
-    end: codegen.Index,
+    start: codegen.CodePoint,
+    end: codegen.CodePoint,
     // succ_phis: []const BlockCall,
     // params: []const regalloc.VirtualReg,
 };
@@ -56,21 +56,13 @@ pub fn getBlock(self: MachineFunction, block_id: codegen.Index) ?MachBlock {
 }
 
 fn blockHeadersCompareFn(_: void, lhs: BlockHeader, rhs: BlockHeader) std.math.Order {
-    if (lhs.start > rhs.start) {
-        return .gt;
-    }
-
-    if (lhs.start < rhs.start) {
-        return .lt;
-    }
-
-    return .eq;
+    return lhs.start.compareFn(rhs.start);
 }
 
-pub fn getBlockAt(self: MachineFunction, code_point: codegen.Index) ?MachBlock {
+pub fn getBlockAt(self: MachineFunction, code_point: codegen.CodePoint) ?MachBlock {
     const block_id = std.sort.binarySearch(
         BlockHeader,
-        code_point,
+        code_point.point,
         self.block_headers,
         void{},
         blockHeadersCompareFn,
@@ -85,7 +77,6 @@ pub fn getBlockAt(self: MachineFunction, code_point: codegen.Index) ?MachBlock {
     };
 }
 
-// maybe use a structure called CodePoint
 pub fn getInstsFrom(self: MachineFunction, from: codegen.CodePoint, to: codegen.CodePoint) []const MachineInst {
     return self.insts[from.toArrayIndex()..to.toArrayIndex()];
 }

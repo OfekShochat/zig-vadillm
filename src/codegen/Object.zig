@@ -1,0 +1,48 @@
+const std = @import("std");
+
+const Buffer = @import("Buffer.zig");
+
+const Self = @This();
+
+pub const Linkage = enum {
+    weak,
+    strong,
+    undefined,
+};
+
+const Symbol = struct {
+    offset: usize,
+    linkage: Linkage,
+};
+
+const SymbolTable = struct {
+    symtab: std.ArrayList(Symbol),
+    strtab: std.ArrayList(u8),
+
+    pub fn deinit(self: *SymbolTable) void {
+        self.buffer.deinit();
+    }
+
+    pub fn add(self: *SymbolTable, symbol: Symbol, name: []const u8) !void {
+        try self.symtab.append(symbol);
+
+        try self.strtab.ensureUnusedCapacity(name.len + 1);
+        try self.strtab.appendSlice(name);
+        try self.strtab.append(0);
+    }
+};
+
+symtab: SymbolTable,
+code_buffer: Buffer,
+
+pub fn registerSymbol(self: *Self, name: []const u8, linkage: Linkage) !void {
+    try self.symtab.add(
+        Symbol{ .linkage = linkage, .offset = self.code_buffer.offset },
+        name,
+    );
+}
+
+pub fn deinit(self: *Self) void {
+    self.symtab.deinit();
+    self.code_buffer.deinit();
+}

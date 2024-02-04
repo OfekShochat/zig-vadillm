@@ -1,5 +1,3 @@
-//! This is heavily inspired by Cranelift's regalloc2.
-
 const std = @import("std");
 const codegen = @import("codegen.zig");
 const Abi = @import("Abi.zig");
@@ -196,9 +194,112 @@ pub const SolutionVisualizer = struct {
     }
 };
 
+<<<<<<< Updated upstream
 pub const Solution = struct {
     allocations: []const LiveRange,
     stitches: Stitch,
+=======
+pub const LiveRangeActiveConsumer = struct {
+    ranges: []const LiveRange,
+    ranges_idx: usize,
+    active: std.ArrayList(LiveRange),
+    current: codegen.CodePoint,
+
+    pub fn advance(self: *LiveRangeActiveConsumer) ![]const LiveRange {
+        var i: usize = 0;
+        while (i < self.active.items.len) {
+            if (self.current.isAfter(self.active.items[i].end)) {
+                _ = self.active.orderedRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        while (self.ranges_idx < self.ranges.len) {
+            const range = self.ranges[self.ranges_idx];
+            if (range.start.isBeforeOrAt(self.current)) {
+                try self.active.append(range);
+                self.ranges_idx += 1;
+            }
+        }
+
+        self.current = self.current.getNextInst();
+
+        return self.active.items;
+    }
+};
+
+pub const SolutionConsumer = struct {
+    stitches: []const Stitch,
+    ranges: []const LiveRange,
+    current: codegen.CodePoint,
+    mapping: std.AutoArrayHashMap(LiveRange, PhysicalReg),
+
+    pub const SolutionPoint = struct {
+        mapping: *std.AutoHashMap(VirtualReg, PhysicalReg),
+        stitches: []const Stitch,
+    };
+
+    pub fn advance(self: *SolutionConsumer) !SolutionPoint {
+        try self.advanceActive();
+
+        const stitches = try self.advanceStitches();
+
+        self.current = self.current.getNextInst();
+
+        return SolutionPoint{
+            .mapping = &self.mapping,
+            .stitches = stitches,
+        };
+    }
+
+    fn advanceStitches(self: *SolutionConsumer) []const Stitch {
+        if (self.stitches.len == 0) return &.{};
+
+        if (self.stitches[0].codepoint.isSame(self.current)) {
+            return &.{};
+        }
+
+        var end: usize = 0;
+        for (self.stitches) |stitch| {
+            end += 1;
+            if (!stitch.code_point.isSame(self.current)) break;
+        }
+
+        defer self.stitches = self.stitches[end..];
+
+        return self.stitches[0..end];
+    }
+
+    fn advanceActive(self: *SolutionConsumer) ![]const LiveRange {
+        var i: usize = 0;
+        while (i < self.mapping.values().len) {
+            if (self.current.isAfter(self.mapping.values().end)) {
+                _ = self.mapping.orderedRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        var index: usize = 0;
+
+        while (index < self.ranges.len) {
+            const range = self.ranges[index];
+            if (range.start.isBeforeOrAt(self.current)) {
+                try self.mapping.put(range.vreg(), range);
+                index += 1;
+            }
+        }
+
+        self.ranges = self.ranges[index..];
+    }
+};
+
+pub const Solution = struct {
+    // has to be sorted for start
+    allocations: []const LiveRange,
+    stitches: []const Stitch,
+>>>>>>> Stashed changes
 
     pub fn deinit(self: *Solution, allocator: std.mem.Allocator) void {
         allocator.free(self.allocations);
