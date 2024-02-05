@@ -91,3 +91,18 @@ test "extract" {
     }
     extract_obj.deinit();
 }
+
+test "extract recursive" {
+    const allocator = std.testing.allocator;
+    var egraph = egg.EGraph(ToyLanguage, struct {}).init(allocator);
+    defer egraph.deinit();
+
+    var const1 = try egraph.addEclass(.{ .constant = 16 });
+    var const2 = try egraph.addEclass(.{ .constant = 17 });
+    var add_expr = try egraph.addEclass(.{ .add = .{ const1, const2 } });
+    var add_expr2 = try egraph.addEclass(.{ .add = .{ add_expr, const2 } });
+    var extract_obj = extract(ToyLanguage).init(0);
+    defer extract_obj.deinit();
+    var cost: usize = try extract_obj.find_cheapest_expression(add_expr2, egraph);
+    std.log.warn("cost: {}", .{cost});
+}
