@@ -1,14 +1,11 @@
 const Instruction = @import("../instructions.zig").Instruction;
 const std = @import("std");
 const Type = @import("../types.zig").Type;
-
 // intra procedural
 
 const Region = struct {
     region_parents: []Edge,
     insts: []Node,
-
-    pub fn getParents() []*Region {}
 };
 
 const GamaNode = struct {
