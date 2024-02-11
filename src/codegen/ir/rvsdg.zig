@@ -11,7 +11,7 @@ const Region = struct {
 // Gama node represents an if-else-then statement it consists of condition which is just a region,
 // and the evaluation of this region will affect the chosen case.
 const GamaNode = struct {
-    cond: Regions,
+    cond: Region,
     cases: []Region,
     outputs: []Region,
 };
@@ -50,8 +50,8 @@ const OmegaNode = struct {
 
 // Optimaization barrier, acts as a state edge.
 // the barrier will enforce the specific program structure that is described in the graph
-// that is to say, no instruction-order related optimization will be performed on 
-// one block before and one block after this barrier 
+// that is to say, no instruction-order related optimization will be performed on
+// one block before and one block after this barrier
 const OptBarrier = struct {
     inputs: []*Region,
     output: []*Region,
