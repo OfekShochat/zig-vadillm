@@ -4,23 +4,20 @@ const Type = @import("../types.zig").Type;
 // intra procedural
 
 const Region = struct {
-    region_parents: []Edge,
+    region_parents: []*Region,
     insts: []Node,
 };
 
 const GamaNode = struct {
     cond: []Instruction,
-    cond_eval_map: std.HashMap(u32, u32),
-    paths: []Region,
-    exit_node: *Node,
-    parents: []Edge,
+    cases: []Region,
+    outputs: []Region,
 };
 
 const ThetaNode = struct {
-    tail_cond: []Instruction,
+    tail_cond: []Region,
     loop_body: Region,
-    exit_node: *Node,
-    parents: []Edge,
+    outputs: []Region,
 };
 
 // inter procedural
@@ -28,31 +25,21 @@ const ThetaNode = struct {
 const LambdaNode = struct {
     arguments: []Type,
     function_body: Region,
-    exit_node: *Node,
-    parents: []*Edge,
 };
 
 const DeltaNode = struct {
     value: Region,
     inputs: []*Region,
     output: *Region,
-    parents: []*Edge,
 };
 
 const PhiNode = struct {
     input: Region,
     output: Region,
-    parents: []*Edge,
 };
 
 const OmegaNode = struct {
     region: Region,
-    parents: []*Edge,
-};
-
-const Edge = struct {
-    state: bool,
-    end: *Region,
 };
 
 const Node = union {
