@@ -167,8 +167,8 @@ pub const SolutionVisualizer = struct {
                 }
             }
 
-            row_buf[stack_offset - 1] = '\n';
-            try writer.writeAll(row_buf[0..stack_offset]);
+            row_buf[stack_offset + 1] = '\n';
+            try writer.writeAll(row_buf[0..stack_offset + 2]);
         }
     }
 

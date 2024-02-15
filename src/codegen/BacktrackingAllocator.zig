@@ -343,8 +343,6 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
         }
     } else at;
 
-    std.debug.print("{} {}\n", .{ found_range, split_at });
-
     var left_ranges = try self.allocator.alloc(*regalloc.LiveRange, found_idx + 1);
     var right_ranges = try self.allocator.alloc(*regalloc.LiveRange, live_interval.ranges.len - found_idx);
 
@@ -437,7 +435,7 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
 
     self.allocator.free(live_interval.ranges);
 
-    std.debug.print("{}-{} {}-{}\n", .{ split_ranges[0].rawStart(), split_ranges[0].rawEnd(), split_ranges[1].rawStart(), split_ranges[1].rawEnd() });
+    // std.debug.print("{}-{} {}-{}\n", .{ split_ranges[0].rawStart(), split_ranges[0].rawEnd(), split_ranges[1].rawStart(), split_ranges[1].rawEnd() });
 
     // 2. Recalculate and normalize the spill costs.
     // split_ranges[0].spill_cost = recalculateSpillCostFor(split_ranges[0], self.func);
@@ -463,7 +461,7 @@ fn findNextUse(self: Self, from: codegen.CodePoint, live_range: *regalloc.LiveRa
             if (operand.accessType() == .use and operand.vregIndex() == live_range.vreg.index) {
                 return switch (operand.operandUse()) {
                     .early => current.getEarly(),
-                    .late => current.getLate(),
+                    .late => @panic("Late uses are not permitted."),
                 };
             }
         }
