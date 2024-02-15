@@ -16,6 +16,10 @@ pub fn deinit(self: *Self) void {
     self.vtable.deinit(self.vptr);
 }
 
+pub fn print(self: Self, comptime format: []const u8, args: anytype) !void {
+    return std.fmt.format(self, format, args);
+}
+
 pub fn write(self: *Self, bytes: []const u8) !usize {
     const written = self.vtable.write(self.vptr, bytes);
     self.offset += written;

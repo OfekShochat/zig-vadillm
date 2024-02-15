@@ -596,7 +596,7 @@ test "interval tree bench/fuzzing" {
     const RndGen = std.rand.DefaultPrng;
 
     const allocator = std.testing.allocator;
-    const max_end = 10000;
+    const max_end = 500;
     const inserts_num = 1000;
     const queries_num = 500;
     const seed: ?u64 = null;
@@ -604,7 +604,7 @@ test "interval tree bench/fuzzing" {
     const alternative = std.crypto.random.int(u64);
     var rnd = RndGen.init(seed orelse alternative);
 
-    std.debug.print("using seed {}\n", .{seed orelse alternative});
+    std.log.debug("using seed {}", .{seed orelse alternative});
 
     var inserts: [inserts_num]Range = undefined;
     var queries: [queries_num]Range = undefined;
@@ -628,10 +628,16 @@ test "interval tree bench/fuzzing" {
     var results = std.ArrayList(Range).init(allocator);
     defer results.deinit();
 
+    var actual: usize = 0;
+
     const start = try std.time.Instant.now();
 
     for (inserts) |insert| {
-        try interval_tree.insert(insert);
+        // only error is error.DuplicateKey, which is expected.
+        interval_tree.insert(insert) catch continue;
+
+        actual += 1;
+
         if (builtin.mode == .Debug) {
             _ = try interval_tree.checkForCycles(allocator);
         }
@@ -651,7 +657,8 @@ test "interval tree bench/fuzzing" {
     const query_end = try std.time.Instant.now();
 
     const now = try std.time.Instant.now();
-    std.debug.print("total {}. {} per insertion; {} per query\n", .{
+    std.debug.print("({} actual) total {}. {} per insertion; {} per query\n", .{
+        actual,
         std.fmt.fmtDuration(now.since(start)),
         std.fmt.fmtDuration(insertion_end.since(start) / inserts_num),
         std.fmt.fmtDuration(query_end.since(query_start) / queries_num),

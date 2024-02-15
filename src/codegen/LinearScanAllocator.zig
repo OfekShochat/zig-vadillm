@@ -330,7 +330,7 @@ test "poop" {
     var reg_allocator = LinearScanAllocator.init(allocator);
     defer reg_allocator.deinit();
 
-    var bundles = &.{
+    const bundles = &.{
         LiveBundle{
             .ranges = &.{
                 LiveRange{

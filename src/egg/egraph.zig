@@ -108,7 +108,10 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
         pub fn addEclass(self: *@This(), first_enode: L) !Id {
             var enode = first_enode;
 
-            if (self.lookup(&enode)) |existing| {
+            // Find representatives for all children.
+            self.canonicalize(&enode);
+
+            if (self.memo.get(enode)) |existing| {
                 return existing;
             }
 
@@ -223,12 +226,6 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             }
 
             return @constCast(try results.toOwnedSlice());
-        }
-
-        /// updates enode in-place
-        fn lookup(self: @This(), enode: *L) ?Id {
-            self.canonicalize(enode);
-            return self.memo.get(enode.*);
         }
 
         /// updates enode in-place

@@ -34,12 +34,22 @@ const SymbolTable = struct {
 
 symtab: SymbolTable,
 code_buffer: Buffer,
+const_buffer: Buffer,
 
-pub fn registerSymbol(self: *Self, name: []const u8, linkage: Linkage) !void {
+pub fn registerTextSymbol(self: *Self, name: []const u8, linkage: Linkage) !void {
     try self.symtab.add(
         Symbol{ .linkage = linkage, .offset = self.code_buffer.offset },
         name,
     );
+}
+
+pub fn registerConstantSymbol(self: *Self, name: []const u8, linkage: Linkage, data: []const u8) !void {
+    try self.symtab.add(
+        Symbol{ .linkage = linkage, .offset = self.const_buffer.offset },
+        name,
+    );
+
+    try self.const_buffer.writeAll(data);
 }
 
 pub fn deinit(self: *Self) void {

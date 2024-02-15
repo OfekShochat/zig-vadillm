@@ -196,15 +196,24 @@ pub fn parse(allocator: std.mem.Allocator, source: []const u8) !Scope {
 
 test "lisp" {
     const source =
-        \\(:def hello-adam3 (int int) int
+        \\(:def hello-adam3 int
         \\    (add arg0 arg1))
         \\
-        \\(:def hello-adam2 (int int) int
+        \\(:def hello-adam2 int
         \\    (add arg0 arg1))
     ;
     var scope = try parse(std.testing.allocator, source);
     defer scope.deinit(std.testing.allocator);
 
-    std.debug.print("{any}\n", .{scope.params.items[0].scope.params.items});
-    std.debug.print("{any}\n", .{scope.params.items[1].scope.params.items});
+    // try std.testing.expectEqualSlices(Node, &.{
+    //     .{ .intrinsic = "def" },
+    //     .{ .name = "hello-adam3" },
+    //     .{ .name = "int" },
+    // }, scope.params.items[0].scope.params.items[0..3]);
+
+    // try std.testing.expectEqualSlices(Node, &.{
+    //     .{ .intrinsic = "def" },
+    //     .{ .name = "hello-adam2" },
+    //     .{ .name = "int" },
+    // }, scope.params.items[1].scope.params.items[0..3]);
 }

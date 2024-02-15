@@ -1,6 +1,8 @@
 const std = @import("std");
 const codegen = @import("codegen.zig");
 const Abi = @import("Abi.zig");
+const MachineFunction = @import("MachineFunction.zig");
+const SpillCostCalc = @import("SpillCostCalc.zig");
 
 pub const RegClass = enum(u2) {
     int,
@@ -12,28 +14,35 @@ pub const RegAllocError = error{
     ContradictingConstraints,
 };
 
-pub const RegisterAllocator = struct {
-    pub const VTable = struct {
-        run: *const fn (self: *anyopaque, []const *LiveRange) (RegAllocError || std.mem.Allocator.Error)!Solution,
-        getIntermediateSolution: *const fn (self: *anyopaque) std.mem.Allocator.Error!Solution,
-    };
+// TODO: give it the function, it would calculate costs and pass it to the regallocator
+pub fn runRegalloc(comptime R: type, allocator: std.mem.Allocator, abi: Abi, live_ranges: []const *LiveRange) !Solution {
+    const func: *const MachineFunction = undefined;
 
-    vptr: *anyopaque,
-    vtable: VTable,
+    // var spillcost_calc = SpillCostCalc.init(func);
 
-    pub fn run(self: *RegisterAllocator, allocator: std.mem.Allocator, abi: Abi, live_ranges: []const *LiveRange) !Solution {
-        if (self.vtable.run(self.vptr, live_ranges)) |output| {
-            std.log.debug("regalloc found a solution:", .{});
-            try output.visualize(allocator, abi, std.io.getStdErr());
-            return output;
-        } else |err| {
-            std.log.debug("regalloc encountered an error: {}.", .{err});
-            const inter_out = try self.vtable.getIntermediateSolution(self.vptr);
-            try inter_out.visualize(allocator, abi, std.io.getStdErr());
-            return err;
-        }
+    // var liveness = Liveness.init(func);
+    // const live_ranges = liveness.compute();
+
+    var regalloc = R.init(allocator, abi, undefined);
+    defer regalloc.deinit();
+
+    if (regalloc.run(live_ranges)) |output| {
+        const solution = try Solution.fromAllocatedRanges(allocator, output, func);
+
+        std.log.debug("regalloc found a solution:", .{});
+        std.debug.print("{}", .{solution.formatSolution(allocator, abi)});
+
+        return solution;
+    } else |err| {
+        const inter_output = try regalloc.getIntermediateSolution();
+        const solution = try Solution.fromAllocatedRanges(allocator, inter_output, func);
+
+        std.log.debug("regalloc encountered an error: {}.", .{err});
+        std.log.debug("{}", .{solution.formatSolution(allocator, abi)});
+
+        return err;
     }
-};
+}
 
 pub const VirtualReg = struct {
     class: RegClass,
@@ -84,16 +93,6 @@ pub const SolutionVisualizer = struct {
         try self.ranges.append(self.arena.allocator(), range);
     }
 
-    const Context = struct {
-        row_buf: []u8,
-        vis: *SolutionVisualizer,
-        active: *std.ArrayList(LiveRange),
-        pregs: []const PhysicalReg,
-        offsets: std.AutoHashMap(PhysicalReg, usize),
-
-        // fn retireActive(self: Context)
-    };
-
     pub fn format(
         self: *SolutionVisualizer,
         writer: anytype,
@@ -105,12 +104,14 @@ pub const SolutionVisualizer = struct {
     ) !void {
         @memset(row_buf, ' ');
 
-        for (pregs, 0..) |preg, i| {
-            _ = try std.fmt.bufPrint(row_buf[i * 5 ..], "{}", .{preg});
+        var offset: usize = 0;
+        for (pregs) |preg| {
+            _ = try std.fmt.bufPrint(row_buf[offset..], "{}", .{preg});
+            offset += 5;
         }
 
-        row_buf[row_buf.len - 1] = '\n';
-        try writer.writeAll(row_buf);
+        row_buf[offset - 2] = '\n';
+        try writer.writeAll(row_buf[0 .. offset - 1]);
 
         var active_stack = std.AutoHashMap(VirtualReg, usize).init(allocator);
         defer active_stack.deinit();
@@ -194,41 +195,6 @@ pub const SolutionVisualizer = struct {
     }
 };
 
-<<<<<<< Updated upstream
-pub const Solution = struct {
-    allocations: []const LiveRange,
-    stitches: Stitch,
-=======
-pub const LiveRangeActiveConsumer = struct {
-    ranges: []const LiveRange,
-    ranges_idx: usize,
-    active: std.ArrayList(LiveRange),
-    current: codegen.CodePoint,
-
-    pub fn advance(self: *LiveRangeActiveConsumer) ![]const LiveRange {
-        var i: usize = 0;
-        while (i < self.active.items.len) {
-            if (self.current.isAfter(self.active.items[i].end)) {
-                _ = self.active.orderedRemove(i);
-            } else {
-                i += 1;
-            }
-        }
-
-        while (self.ranges_idx < self.ranges.len) {
-            const range = self.ranges[self.ranges_idx];
-            if (range.start.isBeforeOrAt(self.current)) {
-                try self.active.append(range);
-                self.ranges_idx += 1;
-            }
-        }
-
-        self.current = self.current.getNextInst();
-
-        return self.active.items;
-    }
-};
-
 pub const SolutionConsumer = struct {
     stitches: []const Stitch,
     ranges: []const LiveRange,
@@ -295,25 +261,121 @@ pub const SolutionConsumer = struct {
     }
 };
 
+pub fn solutionFrom(allocator: std.mem.Allocator, allocations: []LiveRange, func: *const MachineFunction) !Solution {
+    var stitches = try discoverStitches(allocator, allocations);
+
+    try assignStackSlotsToStitches(&stitches, func);
+
+    return Solution{
+        .allocations = allocations,
+        .stitches = stitches,
+    };
+}
+
+fn discoverStitches(allocator: std.mem.Allocator, allocated_ranges: []LiveRange) ![]Stitch {
+    std.sort.heap(LiveRange, allocated_ranges, void{}, LiveRange.lessThan);
+
+    // Preserves insertion order.
+    var intervals = std.AutoArrayHashMap(*LiveInterval, void).init(allocator);
+    defer intervals.deinit();
+
+    for (allocated_ranges) |range| {
+        try intervals.put(range.live_interval, void{});
+    }
+
+    var last_used = std.AutoHashMap(VirtualReg, *LiveRange).init(allocator);
+    defer last_used.deinit();
+
+    var stitches = std.ArrayList(Stitch).init(allocator);
+
+    // NOTE:
+    // Live intervals should be continuous accross blocks, considering control flow.
+    // Also note that splits within instructions are discarded in emission.
+
+    for (intervals.keys()) |interval| {
+        const range = interval.ranges[0];
+        if (last_used.get(range.vreg)) |last_range| {
+            if (std.meta.eql(interval.allocation.?, last_range.live_interval.allocation.?)) continue;
+
+            try stitches.append(Stitch{
+                .codepoint = last_range.end.getNextInst(),
+                .from = last_range.live_interval.allocation.?,
+                .to = interval.allocation.?,
+            });
+        }
+
+        try last_used.put(range.vreg, range);
+    }
+
+    return stitches.toOwnedSlice();
+}
+
+/// `stitches` should be ordered by codepoint.
+fn assignStackSlotsToStitches(func: *const MachineFunction, stitches: []Stitch) !void {
+    var idx: usize = 0;
+
+    // Should never go negative in valid code.
+    var delta: isize = 0;
+
+    var iter = func.blockIter();
+    while (iter.next()) |block| {
+        var current = block.start;
+
+        for (block.insts) |inst| {
+            while (stitches[idx].codepoint.isSame(current)) : (idx += 1) {
+                // assign everything that needs a stack (to)
+            }
+
+            delta += inst.getStackDelta();
+            std.debug.assert(delta >= 0);
+
+            current = current.getNextInst();
+        }
+    }
+}
+
 pub const Solution = struct {
-    // has to be sorted for start
     allocations: []const LiveRange,
     stitches: []const Stitch,
->>>>>>> Stashed changes
 
     pub fn deinit(self: *Solution, allocator: std.mem.Allocator) void {
         allocator.free(self.allocations);
     }
 
-    pub fn visualize(self: Solution, allocator: std.mem.Allocator, abi: Abi, writer: anytype) !void {
-        var visualizer = SolutionVisualizer.init(allocator, abi);
+    const FormatContext = struct {
+        solution: Solution,
+        allocator: std.mem.Allocator,
+        abi: Abi,
+    };
 
-        for (self.allocations) |range| {
-            try visualizer.add(range);
+    pub fn formatSolution(solution: Solution, allocator: std.mem.Allocator, abi: Abi) std.fmt.Formatter(visualize) {
+        return .{ .data = .{
+            .solution = solution,
+            .allocator = allocator,
+            .abi = abi,
+        } };
+    }
+
+    pub fn visualize(ctx: FormatContext, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        var visualizer = SolutionVisualizer.init(ctx.allocator, ctx.abi);
+        defer visualizer.arena.deinit();
+
+        for (ctx.solution.allocations) |range| {
+            visualizer.add(range) catch @panic("OOM");
         }
 
-        try visualizer.print(writer);
-        visualizer.arena.deinit();
+        visualizer.print(writer) catch @panic("OOM or Writer");
+    }
+
+    pub fn fromAllocatedRanges(allocator: std.mem.Allocator, allocations: []LiveRange, func: *const MachineFunction) !Solution {
+        _ = func;
+        const stitches = try discoverStitches(allocator, allocations);
+        // try assignStackSlotsToStitches(func, stitches);
+
+        return Solution{
+            .allocations = allocations,
+            .stitches = stitches,
+        };
     }
 };
 
@@ -442,12 +504,12 @@ pub const Operand = struct {
 };
 
 pub const Allocation = union(enum) {
-    stack: void,
+    stack: ?usize,
     preg: PhysicalReg,
 };
 
 pub const Stitch = struct {
-    codepoint: usize,
+    codepoint: codegen.CodePoint,
     from: Allocation,
     to: Allocation,
 };
@@ -492,7 +554,7 @@ pub const LiveRange = struct {
     }
 
     pub fn isMinimal(self: LiveRange) bool {
-        return std.meta.eql(self.start.getLate(), self.end) or std.meta.eql(self.start.getNextInst(), self.end);
+        return self.rawEnd() - self.rawStart() <= 2;
     }
 
     pub fn class(self: LiveRange) RegClass {
@@ -576,76 +638,6 @@ pub const LiveBundle = struct {
         return false;
     }
 };
-
-pub const AllocatedLiveBundle = struct {
-    bundle: LiveBundle,
-    allocation: Allocation,
-};
-
-// TODO: find a better name
-pub fn earlyLateToIndex(early_late: usize) usize {
-    return early_late / 2;
-}
-
-pub fn encodeEarlyLate(index: usize, timing: OperandUseTiming) usize {
-    return index * 2 + @intFromEnum(timing);
-}
-
-pub fn calculateStitches(allocator: std.mem.Allocator, allocated_ranges: []LiveInterval) ![]const Stitch {
-    std.sort.heap(AllocatedLiveBundle, allocated_ranges, void{}, LiveRange.compareFn);
-
-    var last_used = std.AutoHashMap(VirtualReg, *LiveInterval).init(allocator);
-    defer last_used.deinit();
-
-    var stitches = std.ArrayList(Stitch).init(allocator);
-
-    // NOTE: live ranges are live always until they are dead,
-    // and that's why we can do this easily. Remember, the
-    // ranges are still in early/late encoding.
-    for (allocated_ranges) |allocated_interval| {
-        for (allocated_interval.ranges) |range| {
-            if (last_used.get(range.vreg)) |last_bundle| {
-                try stitches.append(Stitch{
-                    .codepoint = allocated_interval.bundle.start,
-                    .from = last_bundle.allocation,
-                    .to = allocated_interval.preg,
-                });
-            }
-        }
-    }
-
-    return stitches.toOwnedSlice();
-}
-
-// pub fn allocatedBundlesLessThan(_: void, lhs: AllocatedLiveBundle, rhs: AllocatedLiveBundle) bool {
-//     return lhs.live_range.from < rhs.live_range.from;
-// }
-//
-// pub fn calculateStitches(allocator: std.mem.Allocator, allocated_bundles: []AllocatedLiveBundle) ![]const Stitch {
-//     std.sort.heap(AllocatedLiveBundle, allocated_bundles, void{}, allocatedBundlesLessThan);
-//
-//     var last_used = std.AutoHashMap(VirtualReg, *LiveBundle).init(allocator);
-//     defer last_used.deinit();
-//
-//     var stitches = std.ArrayList(Stitch).init(allocator);
-//
-//     // NOTE: live ranges are live always until they are dead,
-//     // and that's why we can do this easily. Remember, the
-//     // ranges are still in early/late encoding.
-//     for (allocated_bundles) |allocated_bundle| {
-//         for (allocated_bundle.bundle.ranges) |range| {
-//             if (last_used.get(range.vreg)) |last_bundle| {
-//                 try stitches.append(Stitch{
-//                     .codepoint = allocated_bundle.bundle.start,
-//                     .from = last_bundle.allocation,
-//                     .to = allocated_bundle.allocation,
-//                 });
-//             }
-//         }
-//     }
-//
-//     return stitches.toOwnedSlice();
-// }
 
 test "regalloc.Operand" {
     // use constants and also make a test that should panic (index too high?)

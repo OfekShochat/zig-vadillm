@@ -8,13 +8,19 @@ const regalloc = @import("regalloc.zig");
 const Self = @This();
 
 pub const VTable = struct {
-    emitNops: *const fn (*Buffer, usize) anyerror!void,
-    emitMov: *const fn (*Buffer, regalloc.PhysicalReg, regalloc.PhysicalReg) anyerror!void,
+    emitNops: *const fn (*Buffer, n: usize) anyerror!void,
+    emitMov: *const fn (*Buffer, from: regalloc.Allocation, to: regalloc.Allocation) anyerror!void,
+    emitPrologue: *const fn (*Buffer) anyerror!void,
 };
 
-vptr: *anyopaque,
 vtable: VTable,
+stack_top_offset: usize = 0,
+
+/// in bytes
 block_alignment: usize = 1,
+
+/// in bytes
+word_size: usize = 8,
 
 pub fn emit(
     self: *Self,
@@ -22,6 +28,10 @@ pub fn emit(
     regalloc_solution: *regalloc.SolutionConsumer,
     object: *Object,
 ) !void {
+    try self.vtable.emitPrologue(object.code_buffer);
+
+    self.stack_top_offset = 0;
+
     var iter = func.blockIter();
     while (iter.next()) |block| {
         try self.emitBlock(block, regalloc_solution, &object.code_buffer);
@@ -41,7 +51,7 @@ fn emitBlock(
         const solution_point = try regalloc_solution.advance();
 
         for (solution_point.stitches) |stitch| {
-            try self.vtable.emitMov(stitch.from, stitch.to);
+            try self.vtable.emitMov(buffer, stitch.from, stitch.to);
         }
 
         try inst.emit(buffer, solution_point.mapping);

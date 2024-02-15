@@ -9,19 +9,22 @@ const MachineInst = @This();
 vptr: *anyopaque,
 vtable: VTable,
 
-// constants
-
 pub const VTable = struct {
     getAllocatableOperands: *const fn (self: *anyopaque, *std.ArrayList(regalloc.Operand)) std.mem.Allocator.Error!void,
     // TODO:
     // regTypeForClass: *const fn (regalloc.RegClass) types.Type,
     emit: *const fn (self: *anyopaque, *Buffer, *std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.LiveRange)) anyerror!void,
+    getStackDelta: *const fn (self: *anyopaque) isize,
     // fromBytes: *const fn (allocator: std.mem.Allocator, []const u8) error.ParseError!MachineInst,
     // deinit: *const fn (self: *anyopaque, allocator: std.mem.Allocator) void,
 };
 
 pub fn getAllocatableOperands(self: MachineInst, operands_out: *std.ArrayList(regalloc.Operand)) !void {
     return self.vtable.getAllocatableOperands(self.vptr, operands_out);
+}
+
+pub fn getStackDelta(self: MachineInst) isize {
+    return self.vtable.getStackDelta(self.vptr);
 }
 
 pub fn emit(
@@ -35,9 +38,4 @@ pub fn emit(
 // TODO:
 // pub fn regTypeForClass(self: MachineInst, class: regalloc.RegClass) types.Type {
 //     return self.vtable.regTypeForClass(class);
-// }
-
-// is call?
-// pub fn getTerminatorDataOrNull(self: MachineInst, ) {
-
 // }

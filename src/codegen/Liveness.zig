@@ -4,16 +4,13 @@ const std = @import("std");
 
 const ir = @import("../ir.zig");
 const regalloc = @import("regalloc.zig");
+const codegen = @import("codegen.zig");
 
 const MachineInst = @import("MachineInst.zig");
 const MachineFunction = @import("MachineFunction.zig");
 const DominatorTree = @import("../DominatorTree.zig");
 const ControlFlowGraph = @import("../ControlFlowGraph.zig");
 const LoopAnalysis = @import("../LoopAnalysis.zig");
-
-const Deque = @import("../deque.zig").Deque;
-const HashSet = @import("../hashset.zig").HashSet;
-const ListPool = @import("../list_pool.zig").ListPool;
 
 const Liveness = @This();
 
@@ -122,7 +119,6 @@ fn computeLiveSets(
     }
 }
 
-// TODO: index appropriate to early/late.
 fn computeLiveRanges(
     self: *Liveness,
     allocator: std.mem.Allocator,
@@ -131,10 +127,49 @@ fn computeLiveRanges(
     loop_analysis: *const LoopAnalysis,
     func: *const MachineFunction,
 ) !void {
-    _ = self;
-    _ = allocator;
     _ = cfg;
     _ = domtree;
     _ = loop_analysis;
-    _ = func;
+
+    var iter = func.blockIter();
+
+    var operands_temp = std.ArrayList(regalloc.Operand).init(allocator);
+
+    while (iter.next()) |block| {
+        const liveout = self.liveouts.get(block.id).?.clone(allocator);
+        var vreg_iters = liveout.iterator(.{});
+        while (vreg_iters.next()) |vreg_index| {
+            _ = vreg_index;
+            // add a range from the definition (if any, otherwise the start) to the end of the block
+        }
+
+        const liveins = self.liveins.get(block.id).?;
+
+        // Killed in this block.
+        const killed = liveins.setIntersection(liveout.toggleAll());
+
+        var mapping = std.AutoArrayHashMap(u32, struct { start: codegen.CodePoint, end: codegen.CodePoint }).init(allocator);
+
+
+
+        var current = block.start;
+
+        for (block.insts) |inst| {
+            try inst.getAllocatableOperands(&operands_temp);
+
+            for (operands_temp.items) |operand| {
+                if (killed.isSet(operand.vregIndex()) and operand.accessType() == .def) {
+                    try mapping.putNoClobber(operand.vregIndex(), current);
+                }
+            }
+
+            operands_temp.clearRetainingCapacity();
+            current = current.getNextInst();
+        }
+
+        vreg_iters = killed.iterator(.{});
+        while (vreg_iters.next()) |vreg_index| {
+            _ = vreg_index;
+        }
+    }
 }

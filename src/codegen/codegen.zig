@@ -39,6 +39,14 @@ pub const CodePoint = struct {
         return CodePoint{ .point = self.getEarly().point + 1 };
     }
 
+    pub fn getJustBefore(self: CodePoint) CodePoint {
+        return CodePoint{ .point = self.point - 1 };
+    }
+
+    pub fn getJustAfter(self: CodePoint) CodePoint {
+        return CodePoint{ .point = self.point + 1 };
+    }
+
     pub fn getNextInst(self: CodePoint) CodePoint {
         return CodePoint{ .point = self.getEarly().point + 2 };
     }

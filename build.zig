@@ -62,7 +62,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // unit_tests.addAnonymousModule("prettytable", .{ .source_file = .{ .path = "external/prettytable/src/lib.zig" } });
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 

@@ -5,6 +5,7 @@ const MachineFunction = @import("MachineFunction.zig");
 const IntervalTree = @import("interval_tree.zig").IntervalTree;
 const codegen = @import("codegen.zig");
 const Abi = @import("Abi.zig");
+const SpillCostCalc = @import("SpillCostCalc.zig");
 
 const Self = @This();
 
@@ -35,8 +36,8 @@ fn priorityCompare(_: void, lhs: *regalloc.LiveRange, rhs: *regalloc.LiveRange) 
 
 queue: std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare),
 // second_chance: std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare),
-func: *const MachineFunction,
 
+spill_cost_calc: SpillCostCalc,
 // int, float, vec
 live_unions: std.EnumMap(regalloc.RegClass, IntervalTree(*regalloc.LiveRange)),
 abi: Abi,
@@ -44,7 +45,7 @@ allocator: std.mem.Allocator,
 spilled: std.ArrayList(*regalloc.LiveRange),
 
 // `allocator` should be in an arena; this allocator is very sloppy in terms of memory management.
-pub fn init(allocator: std.mem.Allocator, abi: Abi, func: *const MachineFunction) Self {
+pub fn init(allocator: std.mem.Allocator, abi: Abi, spill_cost_calc: SpillCostCalc) Self {
     var live_unions = std.EnumMap(regalloc.RegClass, IntervalTree(*regalloc.LiveRange)){};
 
     inline for (std.meta.fields(regalloc.RegClass)) |class| {
@@ -56,7 +57,7 @@ pub fn init(allocator: std.mem.Allocator, abi: Abi, func: *const MachineFunction
     }
 
     return Self{
-        .func = func,
+        .spill_cost_calc = spill_cost_calc,
         .queue = std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare).init(allocator, void{}),
         // .second_cance = std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare).init(allocator, void{}),
         .live_unions = live_unions,
@@ -68,25 +69,12 @@ pub fn init(allocator: std.mem.Allocator, abi: Abi, func: *const MachineFunction
 
 pub fn deinit(self: *Self) void {
     self.queue.deinit();
-    self.live_unions.deinit();
+    for (&self.live_unions.values) |*live_union| {
+        live_union.deinit();
+    }
 }
 
-pub fn registerAllocator(self: *Self) regalloc.RegisterAllocator {
-    return regalloc.RegisterAllocator{
-        .vptr = self,
-        .vtable = .{
-            .run = runInterface,
-            .getIntermediateSolution = getIntermediateSolution,
-        },
-    };
-}
-
-pub fn runInterface(ctx: *anyopaque, live_ranges: []const *regalloc.LiveRange) (regalloc.RegAllocError || std.mem.Allocator.Error)!regalloc.Solution {
-    const self: *Self = @ptrCast(@alignCast(ctx));
-    return self.run(live_ranges);
-}
-
-pub fn run(self: *Self, live_ranges: []const *regalloc.LiveRange) (regalloc.RegAllocError || std.mem.Allocator.Error)!regalloc.Solution {
+pub fn run(self: *Self, live_ranges: []const *regalloc.LiveRange) ![]regalloc.LiveRange {
     try self.queue.addSlice(live_ranges);
 
     while (self.queue.removeOrNull()) |live_range| {
@@ -109,25 +97,12 @@ pub fn run(self: *Self, live_ranges: []const *regalloc.LiveRange) (regalloc.RegA
         }
     }
 
-    const allocations = try self.calculateAllocations();
-    for (allocations) |allocated| {
-        std.debug.print("{}: {}-{} {any}\n", .{ allocated.vreg.index, allocated.start, allocated.end, allocated.live_interval.allocation });
-    }
-
-    return regalloc.Solution{
-        .allocations = allocations,
-        .stitches = undefined,
-        // .stitches = try regalloc.calculateStitches(self.allocator, allocations),
-    };
+    return try self.calculateAllocations();
 }
 
-pub fn getIntermediateSolution(ctx: *anyopaque) std.mem.Allocator.Error!regalloc.Solution {
-    const self: *Self = @ptrCast(@alignCast(ctx));
-
-    return .{
-        .allocations = try self.calculateAllocations(),
-        .stitches = undefined,
-    };
+pub fn getIntermediateSolution(self: *Self) std.mem.Allocator.Error![]regalloc.LiveRange {
+    return try self.calculateAllocations();
+    // return regalloc.Solution.fromAllocations();
 }
 
 fn calculateAllocations(self: *Self) ![]regalloc.LiveRange {
@@ -152,7 +127,7 @@ fn calculateAllocations(self: *Self) ![]regalloc.LiveRange {
 fn spill(self: *Self, live_range: *regalloc.LiveRange) Error!void {
     // TODO: Second-chance queue?
 
-    live_range.live_interval.allocation = .stack;
+    live_range.live_interval.allocation = .{ .stack = ~@as(usize, 0) };
     try self.spilled.append(live_range);
 }
 
@@ -322,6 +297,7 @@ fn trySplitAndRequeue(self: *Self, live_range: *regalloc.LiveRange) !bool {
     }
 
     std.debug.assert(!std.meta.eql(first_point_of_intersection, codegen.CodePoint.invalidMax()));
+    std.debug.assert(live_range.start.isBeforeOrAt(first_point_of_intersection) and live_range.end.isAfterOrAt(first_point_of_intersection));
 
     // split live interval
     const split_ranges = try self.splitAt(first_point_of_intersection, live_range.live_interval);
@@ -353,20 +329,21 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
 
     const found_range = live_interval.ranges[found_idx];
 
-    // std.debug.print("splitting {any} {} at {}\n", .{ live_interval.ranges, found_range, at });
-
+    // std.debug.print("splitting {} at {}\n", .{ found_range, at });
     if (found_range.isMinimal()) {
         return null;
     }
 
     const split_at = if (found_range.start.isSame(at)) blk: {
         // The intersecting range starts before live_interval; split at the first use.
-        if (found_range.uses.len == 0 or found_range.uses[0].isSame(found_range.end)) {
+        if (found_range.uses.len == 0 or found_range.uses[0].isSame(found_range.end) or found_range.uses[0].isSame(found_range.start)) {
             break :blk found_range.start.getNextInst();
         } else {
             break :blk found_range.uses[0];
         }
-    } else at.getPrevInst();
+    } else at;
+
+    std.debug.print("{} {}\n", .{ found_range, split_at });
 
     var left_ranges = try self.allocator.alloc(*regalloc.LiveRange, found_idx + 1);
     var right_ranges = try self.allocator.alloc(*regalloc.LiveRange, live_interval.ranges.len - found_idx);
@@ -411,11 +388,17 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
             }
         }
 
-        const uses_split_idx = if (found_range.uses[low].isAfter(split_at)) low else low + 1;
+        const uses_split_idx = if (found_range.uses[low].isAfterOrAt(split_at)) low else low + 1;
+        // const end = if (found_range.uses[low].isAfter(split_at))
+        //     found_range.uses[low].getJustBefore()
+        // else
+        //     found_range.uses[low];
+
+        // std.debug.print("use {} {} {}\n", .{ uses_split_idx, found_range.uses[low], split_at });
 
         split_ranges[0] = .{
             .start = found_range.start,
-            .end = split_at.getLate(),
+            .end = split_at.getJustBefore(),
             .live_interval = &split_intervals[0],
             .spill_cost = 10,
             .uses = found_range.uses[0..uses_split_idx],
@@ -424,7 +407,7 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
         };
 
         split_ranges[1] = .{
-            .start = split_at.getNextInst(),
+            .start = split_at,
             .end = found_range.end,
             .live_interval = &split_intervals[1],
             .spill_cost = 10,
@@ -453,6 +436,8 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
     live_union.delete(found_range) catch {}; // error.NoSuchKey might be expected here.
 
     self.allocator.free(live_interval.ranges);
+
+    std.debug.print("{}-{} {}-{}\n", .{ split_ranges[0].rawStart(), split_ranges[0].rawEnd(), split_ranges[1].rawStart(), split_ranges[1].rawEnd() });
 
     // 2. Recalculate and normalize the spill costs.
     // split_ranges[0].spill_cost = recalculateSpillCostFor(split_ranges[0], self.func);
@@ -489,17 +474,11 @@ fn findNextUse(self: Self, from: codegen.CodePoint, live_range: *regalloc.LiveRa
     return null;
 }
 
-test "poop" {
+test "regalloc.simple allocations" {
     const allocator = std.testing.allocator;
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-
-    var func = MachineFunction{
-        .insts = &.{},
-        .block_headers = &.{},
-        .num_virtual_regs = 3,
-    };
 
     const abi = Abi{
         .int_pregs = &.{
@@ -511,15 +490,11 @@ test "poop" {
         .vector_pregs = null,
     };
 
-    var reg_alloc = Self.init(
-        arena.allocator(),
-        abi,
-        &func,
-    );
-
     var ranges = std.ArrayList(*regalloc.LiveRange).init(arena.allocator());
 
     var intervals = try arena.allocator().alloc(regalloc.LiveInterval, 3);
+
+    // late uses are NOT permitted
 
     var live_ranges = [_]regalloc.LiveRange{
         .{
@@ -528,15 +503,15 @@ test "poop" {
             .spill_cost = 1,
             .live_interval = &intervals[0],
             .vreg = regalloc.VirtualReg{ .class = .int, .index = 0 },
-            .uses = &.{ .{ .point = 15 }, .{ .point = 30 } },
+            .uses = &.{ .{ .point = 14 }, .{ .point = 30 } },
         },
         .{
-            .start = .{ .point = 20 },
+            .start = .{ .point = 10 },
             .end = .{ .point = 31 },
             .spill_cost = 10,
             .live_interval = &intervals[1],
             .vreg = regalloc.VirtualReg{ .class = .int, .index = 1 },
-            .uses = &.{ .{ .point = 21 }, .{ .point = 31 } },
+            .uses = &.{ .{ .point = 20 }, .{ .point = 30 } },
         },
         .{
             .start = .{ .point = 0 },
@@ -579,6 +554,5 @@ test "poop" {
         .allocation = null,
     };
 
-    var reg = reg_alloc.registerAllocator();
-    _ = try reg.run(allocator, abi, ranges.items);
+    _ = try regalloc.runRegalloc(Self, arena.allocator(), abi, ranges.items);
 }
