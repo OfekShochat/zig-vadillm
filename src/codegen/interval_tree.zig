@@ -657,8 +657,9 @@ test "interval tree bench/fuzzing" {
     const query_end = try std.time.Instant.now();
 
     const now = try std.time.Instant.now();
-    std.debug.print("({} actual) total {}. {} per insertion; {} per query\n", .{
+    std.log.debug("({}/{} inserts) total {}. {} per insertion; {} per query\n", .{
         actual,
+        inserts_num,
         std.fmt.fmtDuration(now.since(start)),
         std.fmt.fmtDuration(insertion_end.since(start) / inserts_num),
         std.fmt.fmtDuration(query_end.since(query_start) / queries_num),

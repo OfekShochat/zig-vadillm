@@ -30,15 +30,15 @@ pub fn runRegalloc(comptime R: type, allocator: std.mem.Allocator, abi: Abi, liv
         const solution = try Solution.fromAllocatedRanges(allocator, output, func);
 
         std.log.debug("regalloc found a solution:", .{});
-        std.debug.print("{}", .{solution.formatSolution(allocator, abi)});
+        std.log.debug("{}", .{solution.formatSolution(allocator, abi)});
 
         return solution;
     } else |err| {
         const inter_output = try regalloc.getIntermediateSolution();
         const solution = try Solution.fromAllocatedRanges(allocator, inter_output, func);
 
-        std.log.debug("regalloc encountered an error: {}.", .{err});
-        std.log.debug("{}", .{solution.formatSolution(allocator, abi)});
+        std.log.err("regalloc encountered an error: {}.", .{err});
+        std.log.err("{}", .{solution.formatSolution(allocator, abi)});
 
         return err;
     }
@@ -168,7 +168,7 @@ pub const SolutionVisualizer = struct {
             }
 
             row_buf[stack_offset + 1] = '\n';
-            try writer.writeAll(row_buf[0..stack_offset + 2]);
+            try writer.writeAll(row_buf[0 .. stack_offset + 2]);
         }
     }
 
@@ -261,17 +261,6 @@ pub const SolutionConsumer = struct {
     }
 };
 
-pub fn solutionFrom(allocator: std.mem.Allocator, allocations: []LiveRange, func: *const MachineFunction) !Solution {
-    var stitches = try discoverStitches(allocator, allocations);
-
-    try assignStackSlotsToStitches(&stitches, func);
-
-    return Solution{
-        .allocations = allocations,
-        .stitches = stitches,
-    };
-}
-
 fn discoverStitches(allocator: std.mem.Allocator, allocated_ranges: []LiveRange) ![]Stitch {
     std.sort.heap(LiveRange, allocated_ranges, void{}, LiveRange.lessThan);
 
@@ -322,13 +311,16 @@ fn assignStackSlotsToStitches(func: *const MachineFunction, stitches: []Stitch) 
         var current = block.start;
 
         for (block.insts) |inst| {
+            std.debug.assert(delta >= 0);
+
             while (stitches[idx].codepoint.isSame(current)) : (idx += 1) {
-                // assign everything that needs a stack (to)
+                if (stitches[idx].to == .stack) {
+                    delta += 8; // word_size;
+                    stitches[idx].to = .{ .stack = @intCast(delta) };
+                }
             }
 
             delta += inst.getStackDelta();
-            std.debug.assert(delta >= 0);
-
             current = current.getNextInst();
         }
     }
@@ -340,6 +332,7 @@ pub const Solution = struct {
 
     pub fn deinit(self: *Solution, allocator: std.mem.Allocator) void {
         allocator.free(self.allocations);
+        allocator.free(self.stitches);
     }
 
     const FormatContext = struct {
@@ -368,8 +361,8 @@ pub const Solution = struct {
     }
 
     pub fn fromAllocatedRanges(allocator: std.mem.Allocator, allocations: []LiveRange, func: *const MachineFunction) !Solution {
-        _ = func;
         const stitches = try discoverStitches(allocator, allocations);
+        _ = func;
         // try assignStackSlotsToStitches(func, stitches);
 
         return Solution{
@@ -575,8 +568,8 @@ pub const LiveRange = struct {
 
     pub fn spillable(self: LiveRange) bool {
         return switch (self.constraints()) {
-            .none, .stack, .reuse => true,
-            .fixed_reg, .phys_reg => false,
+            .none, .stack => true,
+            .fixed_reg, .phys_reg, .reuse => false,
         };
     }
 };
@@ -590,54 +583,6 @@ pub const LiveInterval = struct {
 pub fn rangesIntersect(a: LiveRange, start: usize, end: usize) bool {
     return (a.start >= start and a.start <= end) or (start >= a.start and start <= a.end);
 }
-
-pub const LiveBundle = struct {
-    // every vreg in ranges should be equivalent - holding/referencing
-    // the same value, while not overlapping.
-    ranges: []const LiveRange,
-    constraints: LocationConstraint, // the maximum constraints
-    start: usize,
-    end: usize,
-
-    pub fn calculateSpillcost(self: LiveBundle) usize {
-        var sum: usize = 0;
-        for (self.ranges) |range| {
-            sum += range.spill_cost;
-        }
-        return sum;
-    }
-
-    pub fn class(self: LiveBundle) RegClass {
-        // I can assume ranges is non null
-        return self.ranges[0].vreg.class;
-    }
-
-    pub fn intersects(self: LiveBundle, other: LiveBundle) bool {
-        if (self.end < other.start or other.end < self.start) {
-            return false;
-        }
-
-        var i: usize = 0;
-        var j: usize = 0;
-
-        while (i < self.ranges.len and j < other.ranges.len) {
-            const a = self.ranges[i];
-            const b = other.ranges[j];
-
-            if (rangesIntersect(a, b.start, b.end)) {
-                return true;
-            }
-
-            if (a.end < b.start) {
-                i += 1;
-            } else {
-                j += 1;
-            }
-        }
-
-        return false;
-    }
-};
 
 test "regalloc.Operand" {
     // use constants and also make a test that should panic (index too high?)

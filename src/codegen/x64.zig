@@ -5,14 +5,46 @@ const Target = @import("Target.zig");
 const Buffer = @import("Buffer.zig");
 const MachineInst = @import("MachineInst.zig");
 
+const rax = regalloc.PhysicalReg{ .class = .int, .encoding = 0 };
+const rcx = regalloc.PhysicalReg{ .class = .int, .encoding = 1 };
+const rdx = regalloc.PhysicalReg{ .class = .int, .encoding = 2 };
+const rbx = regalloc.PhysicalReg{ .class = .int, .encoding = 3 };
+const rsp = regalloc.PhysicalReg{ .class = .int, .encoding = 4 };
+const rbp = regalloc.PhysicalReg{ .class = .int, .encoding = 5 };
+const rsi = regalloc.PhysicalReg{ .class = .int, .encoding = 6 };
+const rdi = regalloc.PhysicalReg{ .class = .int, .encoding = 7 };
+const r8 = regalloc.PhysicalReg{ .class = .int, .encoding = 8 };
+const r9 = regalloc.PhysicalReg{ .class = .int, .encoding = 9 };
+const r10 = regalloc.PhysicalReg{ .class = .int, .encoding = 10 };
+const r11 = regalloc.PhysicalReg{ .class = .int, .encoding = 11 };
+const r12 = regalloc.PhysicalReg{ .class = .int, .encoding = 12 };
+const r13 = regalloc.PhysicalReg{ .class = .int, .encoding = 13 };
+const r14 = regalloc.PhysicalReg{ .class = .int, .encoding = 14 };
+const r15 = regalloc.PhysicalReg{ .class = .int, .encoding = 15 };
+
+const st0 = regalloc.PhysicalReg{ .class = .float, .encoding = 0 };
+const st1 = regalloc.PhysicalReg{ .class = .float, .encoding = 1 };
+const st2 = regalloc.PhysicalReg{ .class = .float, .encoding = 2 };
+const st3 = regalloc.PhysicalReg{ .class = .float, .encoding = 3 };
+const st4 = regalloc.PhysicalReg{ .class = .float, .encoding = 4 };
+const st5 = regalloc.PhysicalReg{ .class = .float, .encoding = 4 };
+const st6 = regalloc.PhysicalReg{ .class = .float, .encoding = 6 };
+const st7 = regalloc.PhysicalReg{ .class = .float, .encoding = 7 };
+
+// ymm and xmm are contained here
+const zmm0 = regalloc.PhysicalReg{ .class = .vector, .encoding = 0 };
+
 pub const MemoryAddressing = struct {
-    real: union(enum) {},
-    stack_rel: usize,
+    base: regalloc.PhysicalReg,
+    index: regalloc.PhysicalReg,
+    scale: u32,
+    imm: u32,
 };
 
 pub fn emitNops(buffer: *Buffer, n: usize) !void {
-    _ = buffer;
-    _ = n;
+    for (0..n) |_| {
+        try buffer.writeAll("nop\n");
+    }
 }
 
 pub fn emitMov(buffer: *Buffer, from: regalloc.Allocation, to: regalloc.Allocation) !void {

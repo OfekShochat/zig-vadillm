@@ -46,12 +46,12 @@ pub fn getBlock(self: MachineFunction, block_id: codegen.Index) ?MachBlock {
         return null;
     }
 
-    const header = self.block_headers.items[block_id];
+    const header = self.block_headers[block_id];
 
     return MachBlock{
         .id = block_id,
         .start = header.start,
-        .insts = self.insts[header.start..header.end],
+        .insts = self.insts[header.start.point..header.end.point],
     };
 }
 
@@ -89,7 +89,7 @@ pub fn blockIter(self: *const MachineFunction) BlockIter {
 
 pub const BlockIter = struct {
     func: *const MachineFunction,
-    index: usize = 0,
+    index: codegen.Index = 0,
 
     pub fn next(self: *BlockIter) ?MachBlock {
         defer self.index += 1;

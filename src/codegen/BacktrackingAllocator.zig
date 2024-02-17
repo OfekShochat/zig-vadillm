@@ -9,7 +9,6 @@ const SpillCostCalc = @import("SpillCostCalc.zig");
 
 const Self = @This();
 
-const hint_weight = 20;
 const spill_cost_weight = 2;
 const interference_cost_weight = 3;
 
@@ -26,13 +25,6 @@ fn priorityCompare(_: void, lhs: *regalloc.LiveRange, rhs: *regalloc.LiveRange) 
 
     return .eq;
 }
-
-// fn recalculateSpillCostFor(live_range: regalloc.LiveRange, func: *const MachineFunction) usize {
-//     _ = live_range;
-//     _ = func;
-//     // func.getInstsAt(live_range.start, live_range.end);
-//     // func.getBlockAt(live_range.start, live_range.end);
-// }
 
 queue: std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare),
 // second_chance: std.PriorityQueue(*regalloc.LiveRange, void, priorityCompare),
@@ -316,8 +308,6 @@ fn trySplitAndRequeue(self: *Self, live_range: *regalloc.LiveRange) !bool {
 fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInterval) !?[]regalloc.LiveRange {
     var split_intervals = try self.allocator.alloc(regalloc.LiveInterval, 2);
 
-    var split_ranges = try self.allocator.alloc(regalloc.LiveRange, 2);
-
     var found_idx: usize = undefined;
 
     for (live_interval.ranges, 0..) |range, i| {
@@ -329,10 +319,11 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
 
     const found_range = live_interval.ranges[found_idx];
 
-    // std.debug.print("splitting {} at {}\n", .{ found_range, at });
     if (found_range.isMinimal()) {
         return null;
     }
+
+    var split_ranges = try self.allocator.alloc(regalloc.LiveRange, 2);
 
     const split_at = if (found_range.start.isSame(at)) blk: {
         // The intersecting range starts before live_interval; split at the first use.
@@ -354,7 +345,7 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
             .start = found_range.start,
             .end = split_at.getPrevInst().getLate(),
             .live_interval = &split_intervals[0],
-            .spill_cost = 10,
+            .spill_cost = 0,
             .uses = &.{},
             .split_count = found_range.split_count + 1,
             .vreg = found_range.vreg,
@@ -364,7 +355,7 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
             .start = split_at,
             .end = found_range.end,
             .live_interval = &split_intervals[1],
-            .spill_cost = 10,
+            .spill_cost = 0,
             .uses = &.{},
             .split_count = found_range.split_count + 1,
             .vreg = found_range.vreg,
@@ -387,18 +378,12 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
         }
 
         const uses_split_idx = if (found_range.uses[low].isAfterOrAt(split_at)) low else low + 1;
-        // const end = if (found_range.uses[low].isAfter(split_at))
-        //     found_range.uses[low].getJustBefore()
-        // else
-        //     found_range.uses[low];
-
-        // std.debug.print("use {} {} {}\n", .{ uses_split_idx, found_range.uses[low], split_at });
 
         split_ranges[0] = .{
             .start = found_range.start,
             .end = split_at.getJustBefore(),
             .live_interval = &split_intervals[0],
-            .spill_cost = 10,
+            .spill_cost = 0,
             .uses = found_range.uses[0..uses_split_idx],
             .split_count = found_range.split_count + 1,
             .vreg = found_range.vreg,
@@ -408,7 +393,7 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
             .start = split_at,
             .end = found_range.end,
             .live_interval = &split_intervals[1],
-            .spill_cost = 10,
+            .spill_cost = 0,
             .uses = found_range.uses[uses_split_idx..],
             .split_count = found_range.split_count + 1,
             .vreg = found_range.vreg,
@@ -434,8 +419,6 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
     live_union.delete(found_range) catch {}; // error.NoSuchKey might be expected here.
 
     self.allocator.free(live_interval.ranges);
-
-    // std.debug.print("{}-{} {}-{}\n", .{ split_ranges[0].rawStart(), split_ranges[0].rawEnd(), split_ranges[1].rawStart(), split_ranges[1].rawEnd() });
 
     // 2. Recalculate and normalize the spill costs.
     // split_ranges[0].spill_cost = recalculateSpillCostFor(split_ranges[0], self.func);
@@ -486,6 +469,14 @@ test "regalloc.simple allocations" {
         },
         .float_pregs = null,
         .vector_pregs = null,
+        .call_conv = .{
+            .params = &.{
+                regalloc.PhysicalReg{ .class = .int, .encoding = 0 },
+            },
+            .callee_saved = &.{
+                regalloc.PhysicalReg{ .class = .int, .encoding = 0 },
+            },
+        },
     };
 
     var ranges = std.ArrayList(*regalloc.LiveRange).init(arena.allocator());
