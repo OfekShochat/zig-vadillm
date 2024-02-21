@@ -1,3 +1,14 @@
+// Notes:
+// Regarding ematching: ematching should stop and backtrack as soon as it finds a special node
+// i.e every node that is not a "simple node". The reason for this is that the ematching algorithm
+// is not aware of control flow, and thus he can traverse the graph incorrectly and create wrong optimizations.
+// General note: Our egraph is somewhat a mixed graph, that is to say, it consists of actually 2 graphs.
+// The first and "outer" graph, is the egraph, the egraph is the "container" of the rvsdg.
+// The rvsdg is the "inner" graph that is contained inside the egraph, it represents our control flow.
+// Another thing to note is that while the egraph have some traversal rules, the rvsdg has its own traversal rules
+// and those should be followed on each graph traversal as disregarding them will result in a wrong traversal of the tree
+// due to the egraph being not aware of control flow at all.
+
 const Instruction = @import("../instructions.zig").Instruction;
 const std = @import("std");
 const Type = @import("../types.zig").Type;
