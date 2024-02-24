@@ -1,5 +1,6 @@
 const std = @import("std");
 const codegen = @import("codegen.zig");
+const types = @import("../types.zig");
 
 const Abi = @import("Abi.zig");
 const MachineFunction = @import("MachineFunction.zig");
@@ -59,8 +60,17 @@ pub fn runRegalloc(comptime R: type, allocator: std.mem.Allocator, abi: Abi, liv
 }
 
 pub const VirtualReg = struct {
-    class: RegClass,
+    // deduplicate the class and the type
     index: u32,
+    typ: types.Type,
+
+    pub fn class(self: VirtualReg) RegClass {
+        if (self.typ.isInt()) return .int;
+        if (self.typ.isFloat()) return .float;
+        if (self.typ.isVector()) return .vector;
+
+        @panic("Invalid type in vreg.");
+    }
 
     pub fn format(
         self: VirtualReg,
@@ -68,7 +78,7 @@ pub const VirtualReg = struct {
         _: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
-        const class_str = switch (self.class) {
+        const class_str = switch (self.class()) {
             .int => "i",
             .float => "f",
             .vector => "v",
@@ -467,7 +477,7 @@ pub const Operand = struct {
 
         return Operand{
             .bits = vreg.index |
-                (@as(u32, @intFromEnum(vreg.class)) << 20) |
+                (@as(u32, @intFromEnum(vreg.class())) << 20) |
                 (@as(u32, @intFromEnum(operand_use)) << 22) |
                 (@as(u32, @intFromEnum(access_type)) << 23) |
                 (@as(u32, constraints.asBytes()) << 24),
@@ -567,7 +577,7 @@ pub const LiveRange = struct {
     }
 
     pub fn class(self: LiveRange) RegClass {
-        return self.vreg.class;
+        return self.vreg.class();
     }
 
     pub fn preg(self: LiveRange) ?PhysicalReg {
@@ -602,7 +612,7 @@ pub fn rangesIntersect(a: LiveRange, start: usize, end: usize) bool {
 
 test "regalloc.Operand" {
     // use constants and also make a test that should panic (index too high?)
-    const operand = Operand.init(VirtualReg{ .class = .int, .index = 5 }, .use, .phys_reg, .early);
+    const operand = Operand.init(VirtualReg{ .typ = types.I8, .index = 5 }, .use, .phys_reg, .early);
     try std.testing.expectEqual(@as(u32, 5), operand.vregIndex());
     try std.testing.expectEqual(LocationConstraint.phys_reg, operand.locationConstraints());
     try std.testing.expectEqual(AccessType.use, operand.accessType());

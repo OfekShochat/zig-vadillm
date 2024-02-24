@@ -1,4 +1,5 @@
 const std = @import("std");
+const regalloc = @import("codegen/regalloc.zig");
 
 const SIZE_MASK = 0b111;
 const INVALID_MASK = 0xFFFF;
@@ -75,51 +76,55 @@ pub const Type = struct {
         }
     }
 
-    pub fn invalid_type() Type {
+    pub fn containingRegisterSize(self: Type) regalloc.RegisterSize {
+        return @enumFromInt(@ctz(self.sizeBytes()));
+    }
+
+    pub fn invalidType() Type {
         return Type{ .val = INVALID_MASK };
     }
 
-    pub fn log2_bits(self: Type) u3 {
+    pub fn log2Bits(self: Type) u3 {
         return @truncate(self.val & SIZE_MASK);
     }
 
-    pub fn size_bits(self: Type) u16 {
-        return @as(u16, 1) << self.log2_bits();
+    pub fn sizeBits(self: Type) u16 {
+        return @as(u16, 1) << self.log2Bits();
     }
 
-    pub fn size_bytes(self: Type) u16 {
-        return (self.size_bits() + 7) / 8;
+    pub fn sizeBytes(self: Type) u16 {
+        return (self.sizeBits() + 7) / 8;
     }
 
-    pub fn log2_lanes(self: Type) u3 {
+    pub fn log2Lanes(self: Type) u3 {
         return @intCast((self.val & LANES_MASK) >> 7);
     }
 
     pub fn lanes(self: Type) u16 {
-        return @as(u16, 1) << self.log2_lanes();
+        return @as(u16, 1) << self.log2Lanes();
     }
 
-    pub fn is_int(self: Type) bool {
-        return self.val & IS_INT_MASK != 0;
+    pub fn isInt(self: Type) bool {
+        return self.val & (IS_INT_MASK | IS_PTR_MASK) != 0;
     }
 
-    pub fn is_void(self: Type) bool {
+    pub fn isVoid(self: Type) bool {
         return self.val == 0;
     }
 
-    pub fn is_float(self: Type) bool {
+    pub fn isFloat(self: Type) bool {
         return self.val & IS_FLOAT_MASK != 0;
     }
 
-    pub fn is_ptr(self: Type) bool {
+    pub fn isPtr(self: Type) bool {
         return self.val & IS_PTR_MASK != 0;
     }
 
-    pub fn is_vector(self: Type) bool {
+    pub fn isVector(self: Type) bool {
         return self.val & IS_VECTOR_MASK != 0;
     }
 
-    pub fn is_valid(self: Type) bool {
+    pub fn isValid(self: Type) bool {
         return self.val != INVALID_MASK;
     }
 };
@@ -137,28 +142,27 @@ pub const VOID = Type.from(void);
 
 test "types" {
     const iv = Type.from(@Vector(4, i32));
-    try std.testing.expect(iv.is_valid());
-    try std.testing.expect(iv.is_vector());
+    try std.testing.expect(iv.isValid());
+    try std.testing.expect(iv.isVector());
     try std.testing.expectEqual(@as(u16, 4), iv.lanes());
-    try std.testing.expectEqual(@as(u16, 32), iv.size_bits());
-    try std.testing.expectEqual(@as(u16, 4), iv.size_bytes());
-    try std.testing.expect(!iv.is_ptr());
-    try std.testing.expect(!iv.is_float());
+    try std.testing.expectEqual(@as(u16, 32), iv.sizeBits());
+    try std.testing.expectEqual(@as(u16, 4), iv.sizeBytes());
+    try std.testing.expect(!iv.isPtr());
+    try std.testing.expect(!iv.isFloat());
 
     const f = F64;
-    try std.testing.expect(f.is_valid());
-    try std.testing.expect(f.is_float());
-    try std.testing.expect(!f.is_vector());
-    try std.testing.expect(!f.is_ptr());
-    try std.testing.expectEqual(@as(u16, 64), f.size_bits());
-    try std.testing.expectEqual(@as(u16, 8), f.size_bytes());
+    try std.testing.expect(f.isValid());
+    try std.testing.expect(f.isFloat());
+    try std.testing.expect(!f.isVector());
+    try std.testing.expect(!f.isPtr());
+    try std.testing.expectEqual(@as(u16, 64), f.sizeBits());
+    try std.testing.expectEqual(@as(u16, 8), f.sizeBytes());
 
     const v = VOID;
-    try std.testing.expect(v.is_valid());
-    try std.testing.expect(v.is_void());
-    try std.testing.expect(!v.is_vector());
-    try std.testing.expect(!v.is_ptr());
-    try std.testing.expect(!v.is_ptr());
-    try std.testing.expectEqual(@as(u16, 1), v.size_bits());
-    try std.testing.expectEqual(@as(u16, 1), v.size_bytes());
+    try std.testing.expect(v.isValid());
+    try std.testing.expect(v.isVoid());
+    try std.testing.expect(!v.isVector());
+    try std.testing.expect(!v.isPtr());
+    try std.testing.expectEqual(@as(u16, 1), v.sizeBits());
+    try std.testing.expectEqual(@as(u16, 1), v.sizeBytes());
 }

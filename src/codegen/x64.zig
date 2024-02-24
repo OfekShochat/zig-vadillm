@@ -1,5 +1,6 @@
 const std = @import("std");
 const regalloc = @import("regalloc.zig");
+const types = @import("../types.zig");
 
 const Target = @import("Target.zig");
 const MachineInst = @import("MachineInst.zig");
@@ -207,6 +208,7 @@ pub const Inst = union(enum) {
         values: []const regalloc.VirtualReg,
     },
     push: struct { size: regalloc.RegisterSize, src: regalloc.VirtualReg },
+    push_imm32: u32,
 
     pub fn emitText(
         self: *const Inst,
@@ -256,27 +258,33 @@ pub const Inst = union(enum) {
             .push => |push| try buffer.print("  push {s}\n", .{
                 getPregFromEncoding(mapping.get(push.src).?.preg, push.size).?,
             }),
+            .push_imm32 => |imm32| try buffer.print("  push {}\n", .{imm32}),
             .syscall => |syscall| {
-                try (Inst{ .mov_imm32 = .{
-                    .imm32 = syscall.id,
-                    .dst = abi.call_conv.params[0],
-                    .size = word_size,
-                } }).emitText(buffer, abi, mapping);
+                if (abi.call_conv.params.len > 0) {
+                    try (Inst{ .mov_imm32 = .{
+                        .imm32 = syscall.id,
+                        .dst = abi.call_conv.params[0],
+                        .size = word_size,
+                    } }).emitText(buffer, abi, mapping);
+                } else {
+                    try (Inst{ .push_imm32 = syscall.id }).emitText(buffer, abi, mapping);
+                }
 
-                // Handle when there's only one register in the abi params
+                var handled: usize = 0;
 
-                for (syscall.values[0 .. abi.call_conv.params.len - 1], abi.call_conv.params[1..]) |value, param_reg| {
+                while (handled + 1 < abi.call_conv.params.len) : (handled += 1) {
                     try (Inst{ .mov_vr = .{
-                        .src = value,
-                        .dst = param_reg,
+                        .src = syscall.values[handled],
+                        .dst = abi.call_conv.params[handled + 1],
                         .size = word_size,
                     } }).emitText(buffer, abi, mapping);
                 }
 
-                for (syscall.values[abi.call_conv.params.len - 1 ..]) |value| {
+                for (syscall.values[handled..]) |value| {
+                    // TODO: this shouldn't be `word_size`'d.
                     try (Inst{ .push = .{
                         .src = value,
-                        .size = word_size,
+                        .size = value.typ.containingRegisterSize(),
                     } }).emitText(buffer, abi, mapping);
                 }
 
@@ -333,7 +341,7 @@ test "emit" {
         .vector_pregs = null,
         .call_conv = .{
             .params = &.{
-                regalloc.PhysicalReg{ .class = .int, .encoding = 0 },
+                // regalloc.PhysicalReg{ .class = .int, .encoding = 0 },
             },
             .callee_saved = &.{},
         },
@@ -347,13 +355,13 @@ test "emit" {
             .disp = 3,
         }, .dst = rax, .size = .@"8" } },
         Inst{ .mov_rr = .{ .src = rax, .dst = rbx, .size = .@"4" } },
-        Inst{ .syscall = .{ .id = 0, .values = &.{regalloc.VirtualReg{ .class = .int, .index = 0 }} } },
+        Inst{ .syscall = .{ .id = 0, .values = &.{regalloc.VirtualReg{ .typ = types.I32, .index = 0 }} } },
     };
 
     var mapping = std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.Allocation).init(allocator);
     defer mapping.deinit();
 
-    try mapping.put(regalloc.VirtualReg{ .class = .int, .index = 0 }, .{ .preg = rbx });
+    try mapping.put(regalloc.VirtualReg{ .typ = types.I32, .index = 0 }, .{ .preg = rbx });
 
     for (insts) |inst| {
         try inst.emitText(&writer, abi, mapping);

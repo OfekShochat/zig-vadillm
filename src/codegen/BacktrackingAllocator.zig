@@ -1,5 +1,6 @@
 const std = @import("std");
 const regalloc = @import("regalloc.zig");
+const types = @import("../types.zig");
 
 const MachineFunction = @import("MachineFunction.zig");
 const IntervalTree = @import("interval_tree.zig").IntervalTree;
@@ -79,7 +80,7 @@ fn runOne(self: *Self, live_range: *regalloc.LiveRange, spillcost_calc: *SpillCo
 
     try interferences.ensureTotalCapacity(4);
 
-    var live_union = self.live_unions.getPtrAssertContains(live_range.vreg.class);
+    var live_union = self.live_unions.getPtrAssertContains(live_range.vreg.class());
     live_union.search(live_range, &interferences) catch {}; // error.NoSuchKey is completely OK here.
 
     // 3. Try to assign a preg if available, otherwise try to evict.
@@ -163,11 +164,11 @@ fn assignPregToLiveInterval(self: *Self, live_interval: *regalloc.LiveInterval, 
 }
 
 fn tryAssignMightEvict(self: *Self, live_range: *regalloc.LiveRange, interferences: []const *regalloc.LiveRange) Error!?regalloc.PhysicalReg {
-    const live_union = self.live_unions.getPtrAssertContains(live_range.vreg.class);
+    const live_union = self.live_unions.getPtrAssertContains(live_range.vreg.class());
 
     var avail_pregs = std.AutoArrayHashMap(regalloc.PhysicalReg, bool).init(self.allocator);
 
-    for (self.abi.getPregsByRegClass(live_range.vreg.class).?) |preg| {
+    for (self.abi.getPregsByRegClass(live_range.vreg.class()).?) |preg| {
         try avail_pregs.put(preg, true);
     }
 
@@ -430,7 +431,7 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
         .allocation = null,
     };
 
-    var live_union = self.live_unions.getPtrAssertContains(live_interval.ranges[0].vreg.class);
+    var live_union = self.live_unions.getPtrAssertContains(live_interval.ranges[0].vreg.class());
     live_union.delete(found_range) catch {}; // error.NoSuchKey might be expected here.
 
     self.allocator.free(live_interval.ranges);
@@ -504,7 +505,7 @@ test "regalloc.simple allocations" {
             .end = .{ .point = 30 },
             .spill_cost = 1,
             .live_interval = &intervals[0],
-            .vreg = regalloc.VirtualReg{ .class = .int, .index = 0 },
+            .vreg = regalloc.VirtualReg{ .typ = types.I8, .index = 0 },
             .uses = &.{ .{ .point = 14 }, .{ .point = 30 } },
         },
         .{
@@ -512,7 +513,7 @@ test "regalloc.simple allocations" {
             .end = .{ .point = 31 },
             .spill_cost = 10,
             .live_interval = &intervals[1],
-            .vreg = regalloc.VirtualReg{ .class = .int, .index = 1 },
+            .vreg = regalloc.VirtualReg{ .typ = types.I16, .index = 1 },
             .uses = &.{ .{ .point = 20 }, .{ .point = 30 } },
         },
         .{
@@ -520,7 +521,7 @@ test "regalloc.simple allocations" {
             .end = .{ .point = 22 },
             .spill_cost = 3,
             .live_interval = &intervals[2],
-            .vreg = regalloc.VirtualReg{ .class = .int, .index = 2 },
+            .vreg = regalloc.VirtualReg{ .typ = types.I8, .index = 2 },
             .uses = &.{ .{ .point = 4 }, .{ .point = 22 } },
         },
     };
