@@ -55,7 +55,7 @@ pub const CodePoint = struct {
         return CodePoint{ .point = self.getEarly().point - 2 };
     }
 
-    pub fn compareFn(self: CodePoint, other: CodePoint) std.math.Order {
+    pub fn compare(self: CodePoint, other: CodePoint) std.math.Order {
         if (self.isBefore(other)) {
             return .lt;
         }

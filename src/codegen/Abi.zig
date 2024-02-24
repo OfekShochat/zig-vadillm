@@ -16,6 +16,7 @@ pub const CallConv = struct {
     stack_params_reverse: bool = true,
 };
 
+// TODO: why optional here?
 int_pregs: ?[]const PhysicalReg,
 float_pregs: ?[]const PhysicalReg,
 vector_pregs: ?[]const PhysicalReg,

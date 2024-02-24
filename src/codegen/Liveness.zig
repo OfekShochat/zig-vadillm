@@ -150,8 +150,6 @@ fn computeLiveRanges(
 
         var mapping = std.AutoArrayHashMap(u32, struct { start: codegen.CodePoint, end: codegen.CodePoint }).init(allocator);
 
-
-
         var current = block.start;
 
         for (block.insts) |inst| {

@@ -6,32 +6,21 @@ const MachineInst = @import("MachineInst.zig");
 
 const MachineFunction = @This();
 
-pub const BlockCall = struct {
-    block: codegen.Index,
-    operands: []const codegen.Index, // VirtualReg?
-};
-
 pub const MachBlock = struct {
     id: codegen.Index,
     start: codegen.CodePoint,
-    // params: []const regalloc.VirtualReg,
     insts: []const MachineInst,
-    // succ_phis: []const BlockCall,
 };
 
 const BlockHeader = struct {
     start: codegen.CodePoint,
     end: codegen.CodePoint,
-    // succ_phis: []const BlockCall,
-    // params: []const regalloc.VirtualReg,
 };
 
 num_virtual_regs: usize,
 // ordered by start
 block_headers: []const BlockHeader,
-// blocks: std.ArrayList(MachBlock),
 insts: []const MachineInst,
-// vregs: std.ArrayList(codegen.regalloc.VirtualReg),
 
 pub fn getInst(self: MachineFunction, index: codegen.Index) ?MachineInst {
     if (index >= self.insts.len) {
@@ -82,9 +71,7 @@ pub fn getInstsFrom(self: MachineFunction, from: codegen.CodePoint, to: codegen.
 }
 
 pub fn blockIter(self: *const MachineFunction) BlockIter {
-    return BlockIter{
-        .func = self,
-    };
+    return BlockIter{ .func = self };
 }
 
 pub const BlockIter = struct {

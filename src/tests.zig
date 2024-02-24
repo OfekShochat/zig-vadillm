@@ -20,4 +20,5 @@ comptime {
     _ = @import("codegen.zig");
 
     _ = @import("codegen/BacktrackingAllocator.zig");
+    _ = @import("codegen/x64.zig");
 }

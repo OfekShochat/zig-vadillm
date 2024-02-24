@@ -1,8 +1,10 @@
 const std = @import("std");
 const codegen = @import("codegen.zig");
+
 const Abi = @import("Abi.zig");
 const MachineFunction = @import("MachineFunction.zig");
 const SpillCostCalc = @import("SpillCostCalc.zig");
+const Target = @import("Target.zig");
 
 pub const RegClass = enum(u2) {
     int,
@@ -14,19 +16,31 @@ pub const RegAllocError = error{
     ContradictingConstraints,
 };
 
-// TODO: give it the function, it would calculate costs and pass it to the regallocator
+/// In bytes
+pub const RegisterSize = enum {
+    @"1",
+    @"2",
+    @"4",
+    @"8",
+    @"16",
+    @"32",
+    @"64",
+    @"128",
+};
+
+// TODO: give it the function, it would calculate costs and liveranges then pass it to the regallocator
 pub fn runRegalloc(comptime R: type, allocator: std.mem.Allocator, abi: Abi, live_ranges: []const *LiveRange) !Solution {
     const func: *const MachineFunction = undefined;
 
-    // var spillcost_calc = SpillCostCalc.init(func);
+    var spillcost_calc: SpillCostCalc = undefined;
 
     // var liveness = Liveness.init(func);
     // const live_ranges = liveness.compute();
 
-    var regalloc = R.init(allocator, abi, undefined);
+    var regalloc = R.init(allocator, abi);
     defer regalloc.deinit();
 
-    if (regalloc.run(live_ranges)) |output| {
+    if (regalloc.run(live_ranges, &spillcost_calc)) |output| {
         const solution = try Solution.fromAllocatedRanges(allocator, output, func);
 
         std.log.debug("regalloc found a solution:", .{});
@@ -191,7 +205,7 @@ pub const SolutionVisualizer = struct {
 
         try active.ensureTotalCapacity(self.max_width);
 
-        return self.format(writer, allocator, try allocator.alloc(u8, self.max_width * 5), pregs, &active, offsets);
+        return self.format(writer, allocator, try allocator.alloc(u8, self.max_width * 5 + 1), pregs, &active, offsets);
     }
 };
 
@@ -300,7 +314,7 @@ fn discoverStitches(allocator: std.mem.Allocator, allocated_ranges: []LiveRange)
 }
 
 /// `stitches` should be ordered by codepoint.
-fn assignStackSlotsToStitches(func: *const MachineFunction, stitches: []Stitch) !void {
+fn assignStackSlotsToStitches(func: *const MachineFunction, stitches: []Stitch, target: Target) !void {
     var idx: usize = 0;
 
     // Should never go negative in valid code.
@@ -315,7 +329,8 @@ fn assignStackSlotsToStitches(func: *const MachineFunction, stitches: []Stitch) 
 
             while (stitches[idx].codepoint.isSame(current)) : (idx += 1) {
                 if (stitches[idx].to == .stack) {
-                    delta += 8; // word_size;
+                    // TODO: should this always be `word_size`?
+                    delta += target.word_size;
                     stitches[idx].to = .{ .stack = @intCast(delta) };
                 }
             }
@@ -497,6 +512,7 @@ pub const Operand = struct {
 };
 
 pub const Allocation = union(enum) {
+    /// sp-relative
     stack: ?usize,
     preg: PhysicalReg,
 };
@@ -524,22 +540,22 @@ pub const LiveRange = struct {
         return self.start.point;
     }
 
-    pub fn compareFn(self: LiveRange, other: LiveRange) std.math.Order {
-        return switch (self.start.compareFn(other.start)) {
-            .eq => self.end.compareFn(other.end),
+    pub fn compare(self: LiveRange, other: LiveRange) std.math.Order {
+        return switch (self.start.compare(other.start)) {
+            .eq => self.end.compare(other.end),
             else => |e| e,
         };
     }
 
-    pub fn compareFnConst(_: void, self: *const LiveRange, other: *const LiveRange) std.math.Order {
-        return switch (self.start.compareFn(other.start)) {
-            .eq => self.end.compareFn(other.end),
+    pub fn compareConst(_: void, self: *const LiveRange, other: *const LiveRange) std.math.Order {
+        return switch (self.start.compare(other.start)) {
+            .eq => self.end.compare(other.end),
             else => |e| e,
         };
     }
 
     pub fn lessThan(_: void, self: LiveRange, other: LiveRange) bool {
-        return self.compareFn(other) == .lt;
+        return self.compare(other) == .lt;
     }
 
     pub fn rawEnd(self: LiveRange) usize {
@@ -547,11 +563,11 @@ pub const LiveRange = struct {
     }
 
     pub fn isMinimal(self: LiveRange) bool {
-        return self.rawEnd() - self.rawStart() <= 2;
+        return self.end.point - self.start.point <= 2;
     }
 
     pub fn class(self: LiveRange) RegClass {
-        return self.live_interval.vreg.class;
+        return self.vreg.class;
     }
 
     pub fn preg(self: LiveRange) ?PhysicalReg {

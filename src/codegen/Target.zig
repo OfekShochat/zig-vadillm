@@ -22,6 +22,11 @@ block_alignment: usize = 1,
 /// in bytes
 word_size: usize = 8,
 
+preg_sizes: std.EnumMap(regalloc.RegClass, usize),
+
+/// in bytes
+stack_alignment: usize = 16,
+
 pub fn emit(
     self: *Self,
     func: *const MachineFunction,
@@ -53,6 +58,16 @@ fn emitBlock(
     }
 }
 
+fn inferMovSize(self: Self, stitch: regalloc.Stitch) regalloc.RegisterSize {
+    // NOTE: Stack-to-stack stitches should have been removed. This should panic otherwise.
+
+    if (stitch.from == .stack) {
+        return self.preg_sizes.getAssertContains(stitch.to.preg);
+    }
+
+    return self.preg_sizes.getAssertContains(stitch.from.preg);
+}
+
 fn emitStitches(
     self: *Self,
     buffer: *Buffer,
@@ -61,6 +76,6 @@ fn emitStitches(
     // const stitches = try solveParallelStitches(unordered_stitches);
 
     for (stitches) |stitch| {
-        try self.vtable.emitMov(buffer, stitch.from, stitch.to);
+        try self.vtable.emitMov(buffer, stitch.from, stitch.to, self.inferMovSize(stitch));
     }
 }
