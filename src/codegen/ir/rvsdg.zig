@@ -9,6 +9,8 @@
 // and those should be followed on each graph traversal as disregarding them will result in a wrong traversal of the tree
 // due to the egraph being not aware of control flow at all.
 
+// Please refer to the original RVSDG paper for a detailed overview of the blocks and their behavior
+
 const Instruction = @import("../instructions.zig").Instruction;
 const std = @import("std");
 const Type = @import("../types.zig").Type;
@@ -27,7 +29,29 @@ const GamaNode = struct {
     paths: []Id,
 };
 
-// Theta node represents a tail-controlled loop, i.e do-while,
+// We need some way to denote that we reached the end of the diveres control flow region
+// and reached the end of the if statement, therefore we intoduce this block to our rvsdg.
+// this block is the last block of all the paths of the GamaNode. technically it is possible
+// to have an if statement without an exit node, for example in the next if statement we'll have no exit node:
+// if (statement):
+//      return 1;
+// else:
+//      return 0
+// Due to the fact that the control flow ends in each on of the statements, we don't need to have an ExitNode.
+// int a = 0;
+// if (statement):
+//      a = 1;
+// else:
+//      a = 2;
+// print(a)
+//
+// in this if statement, we would need an endnode because our control flow is reunited in the end and we need to know
+// where it happens. the exitNode will point to print(a) in this case.
+const GamaExitNode = struct {
+    unified_flow_node: Id,
+};
+
+// Theta node representsa tail-controlled loop, i.e do-while,
 // after each iteration the tail condition will be evaluated,
 // and this result will decide wether to continue or break.
 // the tail condition is just Region.
@@ -43,10 +67,11 @@ const ThetaNode = struct {
 // That is to say, the argument should point to some eclass that represents an expression.
 // In the egraph, the arguments will actually be represented as the childrens of the node,
 // in oppose to the so called "logical" way to represent such a thing, the reason for this
-// decision is the fact that egraph are directed with the opposite way to the flow of consumption
+// decision is the factthat egraph are directed with the opposite way to the flow of consumption
 // lets suppose we have an add instruction, then its children will be its arguments, and not its outputs.
 const LambdaNode = struct {
     arguments: []Id,
+    output: Id,
     function_body: Id,
 };
 
@@ -73,6 +98,15 @@ const OptBarrier = struct {
     code: Id,
 };
 
+const Get = struct {
+    output_id: Id,
+};
+
+const applyNode = struct {
+    function: Id,
+    arguments: []Id,
+};
+
 const Node = union {
     simple: Instruction,
     gama: GamaNode,
@@ -81,4 +115,5 @@ const Node = union {
     delta: DeltaNode,
     phi: PhiNode,
     omega: OmegaNode,
+    gamaExit: GamaExitNode,
 };
