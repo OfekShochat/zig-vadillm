@@ -7,6 +7,8 @@ const std = @import("std");
 const egg = @import("../egg/egg.zig");
 const Id = u32;
 const rvsdg = @import("ir/rvsdg.zig");
+const CFG = @import("../ControlFlowGraph.zig").ControlFlowGraph;
+const Block = @import("../function.zig").Block;
 
 // temporary recExpr object that is the same as the regular one,
 // we currently need it because extraction is not merged yet.
@@ -36,21 +38,17 @@ const Edge = struct {
     succs: std.ArrayList(Id),
 };
 
-const CFG = struct {
-    block_pool: std.ArrayList(BasicBlock),
-    graph: std.HashMap(Id, Edge),
-    entry_point: Id,
-};
+// const CFG = struct {
+//    block_pool: std.ArrayList(BasicBlock),
+//    graph: std.HashMap(Id, Edge),
+//    entry_point: Id,
+//};
 
 pub fn cfgBuilder(comptime L: type, graph: egg.Egraph) type {
     return struct {
         cfg: CFG,
         egraph: graph,
-
-        fn addEdge(from: Id, to: Id) void {
-            _ = from;
-            _ = to;
-        }
+        block_pool: std.ArrayList(Block(L)),
 
         pub fn parseGammaNode(self: *@This(), start_node: rvsdg.GamaNode) void {
             // insert entry block
@@ -58,26 +56,26 @@ pub fn cfgBuilder(comptime L: type, graph: egg.Egraph) type {
             var exit_block = BasicBlock();
             exit_block.append(rvsdg.OptBarrier);
             var unified_instruction: L = null;
-            var curr_block = BasicBlock(L);
+            var curr_block = Block(egg.Id);
 
             for (start_node.paths) |path| {
                 for (path) |node| {
                     switch (node) {
                         rvsdg.simple => {
                             // non-terminating instruction, add to block
-                            curr_block.addInstruction(node);
+                            curr_block.addInstruction(node.id);
                         },
 
                         rvsdg.gamaExit => {
                             // end of if statement
-                            self.cfg.block_pool.append(curr_block);
-                            self.addEdge(curr_block, exit_block);
+                            self.block_pool.append(curr_block);
+                            self.cfg.addEdge(curr_block.ptr, exit_block.ptr);
                             unified_instruction = self.egraph.get(node.unified_flow_node); //TODO: we wont get an egraph at this points, but a RecExpr, therefore we need to create a function that searches for specific ID inside the recexpr.
                             break;
                         },
 
                         rvsdg.gama => {
-                            self.cfg.block_poo.append(curr_block);
+                            self.cfg.block_pool.append(curr_block);
                             self.parseGammaNode(node);
                         },
 

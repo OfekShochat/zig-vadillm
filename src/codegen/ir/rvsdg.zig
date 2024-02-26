@@ -25,6 +25,7 @@ const Region = struct {
 // Gama node represents an if-else-then statement it consists of condition which is just a region,
 // and the evaluation of this region will affect the chosen case.
 const GamaNode = struct {
+    node_id: Id,
     cond: Id,
     paths: []Id,
 };
@@ -56,6 +57,7 @@ const GamaExitNode = struct {
 // and this result will decide wether to continue or break.
 // the tail condition is just Region.
 const ThetaNode = struct {
+    node_id: Id,
     tail_cond: Id,
     loop_body: Id,
 };
@@ -70,23 +72,27 @@ const ThetaNode = struct {
 // decision is the factthat egraph are directed with the opposite way to the flow of consumption
 // lets suppose we have an add instruction, then its children will be its arguments, and not its outputs.
 const LambdaNode = struct {
+    node_id: Id,
     arguments: []Id,
     output: Id,
     function_body: Id,
 };
 
 const DeltaNode = struct {
+    node_id: Id,
     value: Region,
     inputs: []*Region,
     output: *Region,
 };
 
 const PhiNode = struct {
+    node_id: Id,
     input: Region,
     output: Region,
 };
 
 const OmegaNode = struct {
+    node_id: Id,
     region: Region,
 };
 
