@@ -77,7 +77,7 @@ pub const Type = struct {
     }
 
     pub fn containingRegisterSize(self: Type) regalloc.RegisterSize {
-        return @enumFromInt(@ctz(self.sizeBytes()));
+        return @enumFromInt(@ctz(self.sizeBytes() * self.lanes()));
     }
 
     pub fn invalidType() Type {
@@ -137,6 +137,14 @@ pub const I64 = Type.from(i64);
 
 pub const F32 = Type.from(f32);
 pub const F64 = Type.from(f64);
+
+pub const I32x4 = Type.from(@Vector(4, i32));
+pub const I32x8 = Type.from(@Vector(8, i32));
+pub const I32x16 = Type.from(@Vector(16, i32));
+
+pub const I64x2 = Type.from(@Vector(2, i64));
+pub const I64x4 = Type.from(@Vector(4, i64));
+pub const I64x8 = Type.from(@Vector(8, i64));
 
 pub const VOID = Type.from(void);
 

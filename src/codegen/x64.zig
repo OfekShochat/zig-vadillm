@@ -122,6 +122,55 @@ fn getIntRegFromEncoding(encoding: u7, size: regalloc.RegisterSize) ?[]const u8 
             .@"8" => "rsp",
             else => @panic("Non existent register."),
         },
+        5 => switch (size) {
+            .@"1" => "bpl",
+            .@"2" => "bp",
+            .@"4" => "ebp",
+            .@"8" => "rbp",
+            else => @panic("Non existent register."),
+        },
+        6 => switch (size) {
+            .@"1" => "dh",
+            .@"2" => "si",
+            .@"4" => "esi",
+            .@"8" => "rsi",
+            else => @panic("Non existent register."),
+        },
+        7 => switch (size) {
+            .@"1" => "bh",
+            .@"2" => "di",
+            .@"4" => "edi",
+            .@"8" => "rdi",
+            else => @panic("Non existent register."),
+        },
+        12 => switch (size) {
+            .@"1" => "r12b",
+            .@"2" => "r12w",
+            .@"4" => "r12d",
+            .@"8" => "r12",
+            else => @panic("Non existent register."),
+        },
+        13 => switch (size) {
+            .@"1" => "r13b",
+            .@"2" => "r13w",
+            .@"4" => "r13d",
+            .@"8" => "r13",
+            else => @panic("Non existent register."),
+        },
+        14 => switch (size) {
+            .@"1" => "r14b",
+            .@"2" => "r14w",
+            .@"4" => "r14d",
+            .@"8" => "r14",
+            else => @panic("Non existent register."),
+        },
+        15 => switch (size) {
+            .@"1" => "r15b",
+            .@"2" => "r15w",
+            .@"4" => "r15d",
+            .@"8" => "r15",
+            else => @panic("Non existent register."),
+        },
         // TODO: finish this
         else => null,
     };
@@ -133,9 +182,11 @@ fn getFloatRegFromEncoding(encoding: u7, size: regalloc.RegisterSize) ?[]const u
     return "st0";
 }
 
+// Returns the first-containing vector register for `size`.
 fn getVectorRegFromEncoding(encoding: u7, size: regalloc.RegisterSize) ?[]const u8 {
     _ = encoding;
     _ = size;
+
     return "xmm0";
 }
 
@@ -188,12 +239,21 @@ fn fmtAllocation(allocation: regalloc.Allocation) std.fmt.Formatter(formatAlloca
     return .{ .data = allocation };
 }
 
+fn selectMovInst(src_size: regalloc.RegisterSize) []const u8 {
+    return switch (src_size) {
+        .@"4" => "movl",
+        .@"8" => "movq",
+        else => unreachable,
+    };
+}
+
 pub const Inst = union(enum) {
-    // this doesn't make sense register allocation wise
     mov_rr: struct { size: regalloc.RegisterSize, src: regalloc.PhysicalReg, dst: regalloc.PhysicalReg },
     mov_mr: struct { size: regalloc.RegisterSize, src: MemoryAddressing, dst: regalloc.PhysicalReg },
     mov_rm: struct { size: regalloc.RegisterSize, src: regalloc.PhysicalReg, dst: MemoryAddressing },
-    mov_imm32: struct { size: regalloc.RegisterSize, imm32: u32, dst: regalloc.PhysicalReg },
+    // mov_imm32: struct { size: regalloc.RegisterSize, imm32: u32, dst: regalloc.PhysicalReg },
+    // mov_imm32v: struct { imm32: u32, dst: regalloc.VirtualReg },
+    mov_iv: struct { imm: u64, dst: regalloc.VirtualReg },
     mov_vr: struct { size: regalloc.RegisterSize, src: regalloc.VirtualReg, dst: regalloc.PhysicalReg },
     mov: struct { size: regalloc.RegisterSize, src: regalloc.VirtualReg, dst: regalloc.VirtualReg },
     add: struct {
@@ -202,21 +262,19 @@ pub const Inst = union(enum) {
         rhs: regalloc.VirtualReg,
         dst: regalloc.VirtualReg,
     },
-    ret: ?regalloc.VirtualReg,
-    syscall: struct {
-        id: u32,
-        values: []const regalloc.VirtualReg,
-    },
+    ret: void,
+    syscall: struct { values: []const regalloc.VirtualReg },
     push: struct { size: regalloc.RegisterSize, src: regalloc.VirtualReg },
+    pop: struct { size: regalloc.RegisterSize, dst: regalloc.VirtualReg },
     push_imm32: u32,
 
     pub fn emitText(
         self: *const Inst,
         buffer: *std.io.AnyWriter,
-        abi: Abi,
         mapping: std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.Allocation),
     ) !void {
         switch (self.*) {
+            // TODO: infer movq/mov/movl for xmm registers etc
             .mov_rr => |mov_rr| try buffer.print("  mov {s}, {s}\n", .{
                 getPregFromEncoding(mov_rr.dst, mov_rr.size).?,
                 getPregFromEncoding(mov_rr.src, mov_rr.size).?,
@@ -237,56 +295,49 @@ pub const Inst = union(enum) {
                 getPregFromEncoding(mov_vr.dst, mov_vr.size).?,
                 fmtAllocation(mapping.get(mov_vr.src).?),
             }),
-            .mov_imm32 => |mov| try buffer.print("  mov {s}, {}\n", .{
-                getPregFromEncoding(mov.dst, mov.size).?,
-                mov.imm32,
+            .mov_iv => |mov| try buffer.print("  mov {s}, {}\n", .{
+                fmtAllocation(mapping.get(mov.dst).?),
+                mov.imm,
             }),
             .add => |add| try buffer.print("  add {s}, {s}\n", .{
                 getPregFromEncoding(mapping.get(add.dst).?.preg, add.size).?,
                 getPregFromEncoding(mapping.get(add.rhs).?.preg, add.size).?,
             }),
-            .ret => |value| if (value) |vreg| {
-                // TODO: optimizations of bigger structures.
-                try (Inst{ .mov_vr = .{
-                    .src = vreg,
-                    .dst = rax,
-                    .size = word_size,
-                } }).emitText(buffer, abi, mapping);
-
-                try buffer.writeAll("  ret\n");
-            },
+            .ret => try buffer.writeAll("  ret\n"),
             .push => |push| try buffer.print("  push {s}\n", .{
                 getPregFromEncoding(mapping.get(push.src).?.preg, push.size).?,
             }),
+            .pop => |pop| try buffer.print("  pop {s}\n", .{
+                getPregFromEncoding(mapping.get(pop.dst).?.preg, pop.size).?,
+            }),
             .push_imm32 => |imm32| try buffer.print("  push {}\n", .{imm32}),
-            .syscall => |syscall| {
-                if (abi.call_conv.params.len > 0) {
-                    try (Inst{ .mov_imm32 = .{
-                        .imm32 = syscall.id,
-                        .dst = abi.call_conv.params[0],
-                        .size = word_size,
-                    } }).emitText(buffer, abi, mapping);
-                } else {
-                    try (Inst{ .push_imm32 = syscall.id }).emitText(buffer, abi, mapping);
-                }
-
-                var handled: usize = 0;
-
-                while (handled + 1 < abi.call_conv.params.len) : (handled += 1) {
-                    try (Inst{ .mov_vr = .{
-                        .src = syscall.values[handled],
-                        .dst = abi.call_conv.params[handled + 1],
-                        .size = word_size,
-                    } }).emitText(buffer, abi, mapping);
-                }
-
-                for (syscall.values[handled..]) |value| {
-                    // TODO: this shouldn't be `word_size`'d.
-                    try (Inst{ .push = .{
-                        .src = value,
-                        .size = value.typ.containingRegisterSize(),
-                    } }).emitText(buffer, abi, mapping);
-                }
+            .syscall => {
+                // if (abi.call_conv.params.len > 0) {
+                //     try (Inst{ .mov_imm32 = .{
+                //         .imm32 = syscall.id,
+                //         .dst = abi.call_conv.params[0],
+                //         .size = word_size,
+                //     } }).emitText(buffer, abi, mapping);
+                // } else {
+                //     try (Inst{ .push_imm32 = syscall.id }).emitText(buffer, abi, mapping);
+                // }
+                //
+                // var handled: usize = 0;
+                //
+                // while (handled + 1 < abi.call_conv.params.len) : (handled += 1) {
+                //     try (Inst{ .mov_vr = .{
+                //         .src = syscall.values[handled],
+                //         .dst = abi.call_conv.params[handled + 1],
+                //         .size = word_size,
+                //     } }).emitText(buffer, abi, mapping);
+                // }
+                //
+                // for (syscall.values[handled..]) |value| {
+                //     try (Inst{ .push = .{
+                //         .src = value,
+                //         .size = value.typ.containingRegisterSize(),
+                //     } }).emitText(buffer, abi, mapping);
+                // }
 
                 try buffer.writeAll("  syscall\n");
             },
@@ -302,6 +353,48 @@ pub const Inst = union(enum) {
             .mov_rm,
             => {},
         }
+    }
+
+    fn emitPrologueText(
+        buffer: *std.io.AnyWriter,
+        allocated_size: usize,
+        clobbered_callee_saved: []const regalloc.PhysicalReg,
+    ) !void {
+        // (abi.call_conv.callee_saved)
+        for (clobbered_callee_saved) |preg| {
+            try buffer.print("  push {s}\n", .{getPregFromEncoding(
+                preg,
+                preg_sizes.getAssertContains(preg.class),
+            ).?});
+        }
+
+        try buffer.print(
+            \\  mov rbp, rsp
+            \\  sub rsp, {}
+            \\
+        , .{allocated_size});
+    }
+
+    pub fn emitEpilogueText(
+        buffer: *std.io.AnyWriter,
+        allocated_size: usize,
+        clobbered_callee_saved: []const regalloc.PhysicalReg,
+    ) !void {
+        try buffer.print("  add rsp, {}\n", .{allocated_size});
+
+        var iter = std.mem.reverseIterator(clobbered_callee_saved);
+        while (iter.next()) |preg| {
+            try buffer.print("  pop {s}\n", .{getPregFromEncoding(
+                preg,
+                preg_sizes.getAssertContains(preg.class),
+            ).?});
+        }
+
+        try buffer.writeAll(
+            \\  mov rsp, rbp
+            \\  ret
+            \\
+        );
     }
 
     pub fn machInst(self: *Inst) MachineInst {
@@ -334,38 +427,50 @@ test "emit" {
     var gwriter = buffer.writer();
     var writer = gwriter.any();
 
-    const abi = Abi{
-        // The pregs should not be in the abi, probably.
-        .int_pregs = null,
-        .float_pregs = null,
-        .vector_pregs = null,
+    _ = Abi{
+        .int_pregs = &.{},
+        .float_pregs = &.{},
+        .vector_pregs = &.{},
         .call_conv = .{
-            .params = &.{
-                // regalloc.PhysicalReg{ .class = .int, .encoding = 0 },
-            },
-            .callee_saved = &.{},
+            .params = &.{ rdi, rsi, rdx, rcx, r8, r9 },
+            .syscall_params = &.{ rax, rdi, rsi, rdx, r10, r8, r9 },
+            .callee_saved = &.{ rbp, rbx, r12, r13, r14, r15 },
         },
     };
 
     const insts: []const Inst = &.{
         Inst{ .mov_mr = .{ .src = MemoryAddressing{
             .base = rsp,
-            .index = rax,
+            .index = rbx,
             .scale = 8,
             .disp = 3,
         }, .dst = rax, .size = .@"8" } },
-        Inst{ .mov_rr = .{ .src = rax, .dst = rbx, .size = .@"4" } },
-        Inst{ .syscall = .{ .id = 0, .values = &.{regalloc.VirtualReg{ .typ = types.I32, .index = 0 }} } },
+        Inst{ .mov_iv = .{ .imm = 60, .dst = regalloc.VirtualReg{ .typ = types.I32, .index = 0 } } },
+        Inst{ .mov_iv = .{ .imm = 32, .dst = regalloc.VirtualReg{ .typ = types.I32, .index = 1 } } },
+        Inst{
+            .syscall = .{
+                .values = &.{
+                    regalloc.VirtualReg{ .typ = types.I32, .index = 0 },
+                    regalloc.VirtualReg{ .typ = types.I32, .index = 1 },
+                },
+            },
+        },
     };
 
     var mapping = std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.Allocation).init(allocator);
     defer mapping.deinit();
 
-    try mapping.put(regalloc.VirtualReg{ .typ = types.I32, .index = 0 }, .{ .preg = rbx });
+    try mapping.put(regalloc.VirtualReg{ .typ = types.I32, .index = 0 }, .{ .preg = rax });
+    try mapping.put(regalloc.VirtualReg{ .typ = types.I32, .index = 1 }, .{ .preg = rdi });
+
+    try Inst.emitPrologueText(&writer, 10, &.{rbx});
 
     for (insts) |inst| {
-        try inst.emitText(&writer, abi, mapping);
+        try inst.emitText(&writer, mapping);
     }
+
+    // The entry function should not generate an epilogue
+    try Inst.emitEpilogueText(&writer, 10, &.{rbx});
 
     std.debug.print("{s}\n", .{buffer.items});
 }

@@ -60,14 +60,13 @@ pub fn runRegalloc(comptime R: type, allocator: std.mem.Allocator, abi: Abi, liv
 }
 
 pub const VirtualReg = struct {
-    // deduplicate the class and the type
     index: u32,
     typ: types.Type,
 
     pub fn class(self: VirtualReg) RegClass {
+        if (self.typ.isVector()) return .vector;
         if (self.typ.isInt()) return .int;
         if (self.typ.isFloat()) return .float;
-        if (self.typ.isVector()) return .vector;
 
         @panic("Invalid type in vreg.");
     }

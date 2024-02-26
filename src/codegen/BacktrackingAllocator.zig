@@ -481,10 +481,13 @@ test "regalloc.simple allocations" {
             // regalloc.PhysicalReg{ .class = .int, .encoding = 1 },
             // regalloc.PhysicalReg{ .class = .int, .encoding = 2 },
         },
-        .float_pregs = null,
-        .vector_pregs = null,
+        .float_pregs = &.{},
+        .vector_pregs = &.{},
         .call_conv = .{
             .params = &.{
+                regalloc.PhysicalReg{ .class = .int, .encoding = 0 },
+            },
+            .syscall_params = &.{
                 regalloc.PhysicalReg{ .class = .int, .encoding = 0 },
             },
             .callee_saved = &.{
