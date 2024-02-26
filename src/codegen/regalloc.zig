@@ -432,6 +432,7 @@ pub const LocationConstraint = union(enum) {
 
     /// simulates instructions such as `add` that only have two operands but modify one:
     /// add v2 [late def], v1 [early use], v0 [early use, reuse-reg(0)]
+    /// Should be emulated by adding it to the same interval.
     reuse: u6,
 
     pub fn asBytes(self: LocationConstraint) u8 {
@@ -593,8 +594,8 @@ pub const LiveRange = struct {
 
     pub fn spillable(self: LiveRange) bool {
         return switch (self.constraints()) {
-            .none, .stack => true,
-            .fixed_reg, .phys_reg, .reuse => false,
+            .none, .stack, .reuse => true,
+            .fixed_reg, .phys_reg => false,
         };
     }
 };

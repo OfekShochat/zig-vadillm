@@ -130,7 +130,6 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             try self.eclasses.put(id, eclass);
             try self.memo.putNoClobber(enode, id);
 
-            // here can call a callback?
             self.dirty = true;
 
             return id;

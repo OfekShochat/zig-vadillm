@@ -268,6 +268,14 @@ pub const Inst = union(enum) {
     pop: struct { size: regalloc.RegisterSize, dst: regalloc.VirtualReg },
     push_imm32: u32,
 
+    fn emitTextInterface(
+        self: *const anyopaque,
+        buffer: *std.io.AnyWriter,
+        mapping: std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.Allocation),
+    ) anyerror!void {
+        return emitText(@ptrCast(@alignCast(self)), buffer, mapping);
+    }
+
     pub fn emitText(
         self: *const Inst,
         buffer: *std.io.AnyWriter,
@@ -344,7 +352,14 @@ pub const Inst = union(enum) {
         }
     }
 
-    pub fn getAllocatableOperands(self: *Inst, operands_out: *std.ArrayList(regalloc.Operand)) !void {
+    pub fn getAllocatableOperandsInterface(
+        self: *const anyopaque,
+        operands_out: *std.ArrayList(regalloc.Operand),
+    ) std.mem.Allocator.Error!void {
+        return getAllocatableOperands(@ptrCast(@alignCast(self)), operands_out);
+    }
+
+    pub fn getAllocatableOperands(self: *const Inst, operands_out: *std.ArrayList(regalloc.Operand)) !void {
         _ = operands_out;
 
         switch (self.*) {
@@ -352,6 +367,7 @@ pub const Inst = union(enum) {
             .mov_mr,
             .mov_rm,
             => {},
+            else => {},
         }
     }
 
@@ -397,23 +413,29 @@ pub const Inst = union(enum) {
         );
     }
 
-    pub fn machInst(self: *Inst) MachineInst {
-        return MachineInst{
-            .vtable = MachineInst.VTable{
-                .emit = self.emit,
-                .getAllocatableOperands = self.getAllocatableOperamnds,
-            },
-            .vptr = self,
-        };
+    pub fn getStackDeltaInterface(self: *const anyopaque) isize {
+        _ = self;
+        return 0;
     }
 
-    pub fn machInstReadable(self: *Inst) MachineInst {
+    // pub fn machInst(self: *const Inst) MachineInst {
+    //     return MachineInst{
+    //         .vtable = MachineInst.VTable{
+    //             .emit = emit,
+    //             .getAllocatableOperands = getAllocatableOperands,
+    //         },
+    //         .vptr = self,
+    //     };
+    // }
+
+    pub fn machInstReadable(self: *const Inst) MachineInst {
         return MachineInst{
             .vtable = MachineInst.VTable{
-                .emit = self.emitText,
-                .getAllocatableOperands = self.getAllocatableOperamnds,
+                .emit = emitTextInterface,
+                .getAllocatableOperands = getAllocatableOperandsInterface,
+                .getStackDelta = getStackDeltaInterface,
             },
-            .vptr = self,
+            .vptr = @ptrCast(self),
         };
     }
 };
@@ -465,7 +487,7 @@ test "emit" {
 
     try Inst.emitPrologueText(&writer, 10, &.{rbx});
 
-    for (insts) |inst| {
+    for (insts) |*inst| {
         try inst.emitText(&writer, mapping);
     }
 

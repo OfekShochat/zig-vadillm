@@ -1,7 +1,8 @@
 const std = @import("std");
-
 const regalloc = @import("regalloc.zig");
 const codegen = @import("codegen.zig");
+
+const Abi = @import("Abi.zig");
 const MachineInst = @import("MachineInst.zig");
 
 const MachineFunction = @This();
@@ -42,6 +43,21 @@ pub fn getBlock(self: MachineFunction, block_id: codegen.Index) ?MachBlock {
         .start = header.start,
         .insts = self.insts[header.start.point..header.end.point],
     };
+}
+
+// This duplicates computation with regalloc.
+pub fn getMaxAllocatedStackSize(self: MachineFunction) usize {
+    var current_stack_offset: usize = 0;
+    var max_stack_offset: usize = 0;
+
+    for (self.insts) |inst| {
+        current_stack_offset += inst.getStackDelta();
+        if (current_stack_offset > max_stack_offset) {
+            max_stack_offset = current_stack_offset;
+        }
+    }
+
+    return max_stack_offset;
 }
 
 fn blockHeadersCompareFn(_: void, lhs: BlockHeader, rhs: BlockHeader) std.math.Order {

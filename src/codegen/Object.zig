@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const Buffer = @import("Buffer.zig");
-
 const Self = @This();
 
 pub const Linkage = enum {
@@ -33,8 +31,8 @@ const SymbolTable = struct {
 };
 
 symtab: SymbolTable,
-code_buffer: Buffer,
-const_buffer: Buffer,
+code_buffer: std.io.AnyWriter,
+const_buffer: std.io.AnyWriter,
 
 pub fn registerTextSymbol(self: *Self, name: []const u8, linkage: Linkage) !void {
     try self.symtab.add(
@@ -55,4 +53,5 @@ pub fn registerConstantSymbol(self: *Self, name: []const u8, linkage: Linkage, d
 pub fn deinit(self: *Self) void {
     self.symtab.deinit();
     self.code_buffer.deinit();
+    self.const_buffer.deinit();
 }
