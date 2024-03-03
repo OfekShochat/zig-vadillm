@@ -17,14 +17,14 @@ const Type = @import("../types.zig").Type;
 const Id = @import("../egg/egg.zig").Id;
 // intra procedural
 
-const Region = struct {
+pub const Region = struct {
     id: Id,
     insts: []Node,
 };
 
 // Gama node represents an if-else-then statement it consists of condition which is just a region,
 // and the evaluation of this region will affect the chosen case.
-const GamaNode = struct {
+pub const GamaNode = struct {
     node_id: Id,
     cond: Id,
     paths: []Id,
@@ -48,7 +48,7 @@ const GamaNode = struct {
 //
 // in this if statement, we would need an endnode because our control flow is reunited in the end and we need to know
 // where it happens. the exitNode will point to print(a) in this case.
-const GamaExitNode = struct {
+pub const GamaExitNode = struct {
     unified_flow_node: Id,
 };
 
@@ -56,7 +56,7 @@ const GamaExitNode = struct {
 // after each iteration the tail condition will be evaluated,
 // and this result will decide wether to continue or break.
 // the tail condition is just Region.
-const ThetaNode = struct {
+pub const ThetaNode = struct {
     node_id: Id,
     tail_cond: Id,
     loop_body: Id,
@@ -71,27 +71,27 @@ const ThetaNode = struct {
 // in oppose to the so called "logical" way to represent such a thing, the reason for this
 // decision is the factthat egraph are directed with the opposite way to the flow of consumption
 // lets suppose we have an add instruction, then its children will be its arguments, and not its outputs.
-const LambdaNode = struct {
+pub const LambdaNode = struct {
     node_id: Id,
     arguments: []Id,
     output: Id,
     function_body: Id,
 };
 
-const DeltaNode = struct {
+pub const DeltaNode = struct {
     node_id: Id,
     value: Region,
     inputs: []*Region,
     output: *Region,
 };
 
-const PhiNode = struct {
+pub const PhiNode = struct {
     node_id: Id,
     input: Region,
     output: Region,
 };
 
-const OmegaNode = struct {
+pub const OmegaNode = struct {
     node_id: Id,
     region: Region,
 };
@@ -100,20 +100,20 @@ const OmegaNode = struct {
 // the barrier will enforce the specific program structure that is described in the graph
 // that is to say, no instruction-order related optimization will be performed on
 // one block before and one block after this barrier
-const OptBarrier = struct {
+pub const OptBarrier = struct {
     code: Id,
 };
 
-const Get = struct {
+pub const Get = struct {
     output_id: Id,
 };
 
-const applyNode = struct {
+pub const applyNode = struct {
     function: Id,
     arguments: []Id,
 };
 
-const Node = union {
+pub const Node = union {
     simple: Instruction,
     gama: GamaNode,
     theta: ThetaNode,
