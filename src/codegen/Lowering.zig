@@ -1,14 +1,21 @@
+// 1. Take general lowering rewrites from target struct(create it)
+// 2. Rewrite everything and extract the relevant rewrite
+// 3. Create a cfg
+// 4. Create emmiter
+
+const std = @import("std");
+const egg = @import("../egg/egg.zig");
 const Id = u32;
 const rvsdg = @import("ir/rvsdg.zig");
 const CFG = @import("../ControlFlowGraph.zig").ControlFlowGraph;
 const Block = @import("../function.zig").Block;
-const Instruction = @import("../instructions.zig").Instruction;
+const Instruction = @import("../instructions").Instruction;
 
 // temporary recExpr object that is the same as the regular one,
 // we currently need it because extraction is not merged yet.
 pub fn RecExpr(comptime L: type) type {
     return struct {
-        expr: std.AutoArrayHashMap(egg.Id, L),
+        expr: std.ArrayHashMap(egg.Id, L),
     };
 }
 
@@ -38,7 +45,7 @@ const Edge = struct {
 //    entry_point: Id,
 //};
 
-pub fn cfgBuilder(comptime L: type, graph: egg.Egraph, recexp: RecExpr) type {
+pub fn CfgBuilder(comptime L: type, graph: egg.Egraph, recexp: RecExpr) type {
     return struct {
         cfg: CFG,
         egraph: graph,
@@ -47,7 +54,7 @@ pub fn cfgBuilder(comptime L: type, graph: egg.Egraph, recexp: RecExpr) type {
 
         fn sliceIteratorByValue(iterator: *std.Iterator, value: L) !void {
             while (true) {
-                var next = iterator.next();
+                const next = iterator.next();
                 if (next.?.value_ptr.* == value) {
                     return;
                 } else if (next == null) {
@@ -59,7 +66,7 @@ pub fn cfgBuilder(comptime L: type, graph: egg.Egraph, recexp: RecExpr) type {
         pub fn parseGammaNode(self: *@This(), start_node: rvsdg.gama) void {
             // insert entry block
 
-            var exit_block = BasicBlock();
+            const exit_block = BasicBlock();
             //exit_block.append(rvsdg.OptBarrier);
             var unified_instruction: L = null;
             var curr_block = Block(egg.Id);
@@ -120,10 +127,8 @@ pub fn cfgBuilder(comptime L: type, graph: egg.Egraph, recexp: RecExpr) type {
 }
 
 test "test gammanode parsing" {
-    var recexp = RecExpr(rvsdg.Node);
-    recexp.expr.put(1, rvsdg.GamaNode{.cond = 2, .paths = {7, 12}, .node_id = 1});
-    recexp.expr.put(2, Instruction{.add = .{.lhs = 12, .rhs = 12}});
-    recexp.expr.put(7, Instruction{.sub = .{.rhs = 13, .lhs = 12}});
+    comptime var recexp = RecExpr(rvsdg.Node){ .expr = std.ArrayHashMap(egg.Id, rvsdg.Node).init(std.testing.allocator) };
+    try recexp.expr.putNoClobber(1, rvsdg.GamaNode(.{ .cond = 2, .paths = .{ 3, 5 }, .node_id = 1 }));
     // 1.create rec expression
     // 2. call function
     // 3. profit
