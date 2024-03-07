@@ -9,14 +9,12 @@ const Id = u32;
 const rvsdg = @import("ir/rvsdg.zig");
 const CFG = @import("../ControlFlowGraph.zig").ControlFlowGraph;
 const Block = @import("../function.zig").Block;
-const Instruction = @import("../instructions").Instruction;
+const Instruction = @import("../instructions.zig").Instruction;
 
 // temporary recExpr object that is the same as the regular one,
 // we currently need it because extraction is not merged yet.
 pub fn RecExpr(comptime L: type) type {
-    return struct {
-        expr: std.ArrayHashMap(egg.Id, L),
-    };
+    return struct { expr: std.AutoArrayHashMap(egg.Id, L) };
 }
 
 pub fn BasicBlock(comptime L: type) type {
@@ -127,8 +125,8 @@ pub fn CfgBuilder(comptime L: type, graph: egg.Egraph, recexp: RecExpr) type {
 }
 
 test "test gammanode parsing" {
-    comptime var recexp = RecExpr(rvsdg.Node){ .expr = std.ArrayHashMap(egg.Id, rvsdg.Node).init(std.testing.allocator) };
-    try recexp.expr.putNoClobber(1, rvsdg.GamaNode(.{ .cond = 2, .paths = .{ 3, 5 }, .node_id = 1 }));
+    comptime var recexp = RecExpr(rvsdg.Node){ .expr = std.AutoArrayHashMap(egg.Id, rvsdg.Node).init(std.testing.allocator) };
+    try recexp.expr.putNoClobber(1, rvsdg.GamaNode{ .cond = 2, .paths = []u32{ 3, 5 }, .node_id = 1 });
     // 1.create rec expression
     // 2. call function
     // 3. profit

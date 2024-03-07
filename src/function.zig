@@ -129,66 +129,64 @@ pub const Function = struct {
     }
 };
 
-pub fn Block(comptime L: type) type {
-    return struct {
-        ref: Index,
-        params: std.ArrayListUnmanaged(Index) = .{},
-        insts: std.ArrayListUnmanaged(L) = .{},
+pub const Block = struct {
+    ref: Index,
+    params: std.ArrayListUnmanaged(Index) = .{},
+    insts: std.ArrayListUnmanaged(Instruction) = .{},
 
-        pub fn deinit(self: *Block, allocator: std.mem.Allocator) void {
-            self.insts.deinit(allocator);
-            self.params.deinit(allocator);
-        }
+    pub fn deinit(self: *Block, allocator: std.mem.Allocator) void {
+        self.insts.deinit(allocator);
+        self.params.deinit(allocator);
+    }
 
-        pub fn appendParam(self: *Block, allocator: std.mem.Allocator, value_pool: *ValuePool, ty: Type) std.mem.Allocator.Error!Index {
-            const param_ref = try value_pool.put(allocator, Value.init(ValueData{
-                .param = .{ .block = self.ref, .idx = self.params.items.len },
-            }, ty));
+    pub fn appendParam(self: *Block, allocator: std.mem.Allocator, value_pool: *ValuePool, ty: Type) std.mem.Allocator.Error!Index {
+        const param_ref = try value_pool.put(allocator, Value.init(ValueData{
+            .param = .{ .block = self.ref, .idx = self.params.items.len },
+        }, ty));
 
-            try self.params.append(allocator, param_ref);
+        try self.params.append(allocator, param_ref);
 
-            return param_ref;
-        }
+        return param_ref;
+    }
 
-        pub fn appendInst(self: *Block, allocator: std.mem.Allocator, value_pool: *ValuePool, inst: Instruction, ty: Type) std.mem.Allocator.Error!Index {
-            return self.insertInst(allocator, value_pool, @intCast(self.insts.items.len), inst, ty);
-        }
+    pub fn appendInst(self: *Block, allocator: std.mem.Allocator, value_pool: *ValuePool, inst: Instruction, ty: Type) std.mem.Allocator.Error!Index {
+        return self.insertInst(allocator, value_pool, @intCast(self.insts.items.len), inst, ty);
+    }
 
-        pub fn insertInstBeforeTerm(
-            self: *Block,
-            allocator: std.mem.Allocator,
-            value_pool: *ValuePool,
-            inst: Instruction,
-            ty: Type,
-        ) std.mem.Allocator.Error!Index {
-            std.debug.assert(self.insts.items.len > 0);
+    pub fn insertInstBeforeTerm(
+        self: *Block,
+        allocator: std.mem.Allocator,
+        value_pool: *ValuePool,
+        inst: Instruction,
+        ty: Type,
+    ) std.mem.Allocator.Error!Index {
+        std.debug.assert(self.insts.items.len > 0);
 
-            return self.insertInst(allocator, value_pool, self.insts.items.len - 1, inst, ty);
-        }
+        return self.insertInst(allocator, value_pool, self.insts.items.len - 1, inst, ty);
+    }
 
-        pub fn insertInst(
-            self: *Block,
-            allocator: std.mem.Allocator,
-            value_pool: *ValuePool,
-            before: Index,
-            inst: Instruction,
-            ty: Type,
-        ) std.mem.Allocator.Error!Index {
-            std.debug.assert(before <= self.insts.items.len);
+    pub fn insertInst(
+        self: *Block,
+        allocator: std.mem.Allocator,
+        value_pool: *ValuePool,
+        before: Index,
+        inst: Instruction,
+        ty: Type,
+    ) std.mem.Allocator.Error!Index {
+        std.debug.assert(before <= self.insts.items.len);
 
-            try self.insts.insert(allocator, before, inst);
+        try self.insts.insert(allocator, before, inst);
 
-            return value_pool.put(
-                allocator,
-                Value.init(ValueData{ .inst = .{ .block = self.ref, .pos = @intCast(before) } }, ty),
-            );
-        }
+        return value_pool.put(
+            allocator,
+            Value.init(ValueData{ .inst = .{ .block = self.ref, .pos = @intCast(before) } }, ty),
+        );
+    }
 
-        pub fn getTerminator(self: Block) Instruction {
-            return self.insts.getLast();
-        }
-    };
-}
+    pub fn getTerminator(self: Block) Instruction {
+        return self.insts.getLast();
+    }
+};
 
 pub const ValueData = union(enum) {
     alias: struct { to: Index },

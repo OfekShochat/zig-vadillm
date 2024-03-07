@@ -11,10 +11,10 @@
 
 // Please refer to the original RVSDG paper for a detailed overview of the blocks and their behavior
 
-const Instruction = @import("../instructions").Instruction;
+const Instruction = @import("../../instructions.zig").Instruction;
 const std = @import("std");
-const Type = @import("../types").Type;
-const Id = @import("../egg/egg").Id;
+const Type = @import("../../types.zig").Type;
+const Id = @import("../../egg/egg.zig").Id;
 // intra procedural
 
 pub const Region = struct {
