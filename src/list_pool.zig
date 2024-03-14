@@ -64,7 +64,7 @@ pub fn PooledVector(comptime T: type) type {
 
             try list_pool.setSize(self.offset, curr_size + 1);
 
-            var item = self.getPtr(list_pool, curr_size) orelse @panic("`alloc` returned a smaller-than-expected slice");
+            const item = self.getPtr(list_pool, curr_size) orelse @panic("`alloc` returned a smaller-than-expected slice");
             item.* = val;
         }
 
@@ -161,7 +161,7 @@ pub fn ListPool(comptime T: type) type {
             }
 
             // prepend the head into the free chunks list
-            var next: *u32 = @ptrCast(&self.data.items[offset + 1]);
+            const next: *u32 = @ptrCast(&self.data.items[offset + 1]);
             next.* = self.free.items[size_class];
             self.free.items[size_class] = offset + 1;
         }

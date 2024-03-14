@@ -206,7 +206,7 @@ pub fn Machine(comptime L: type) type {
                 switch (inst) {
                     .bind => |bind| {
                         const eclass = egraph.get(self.regs.items[bind.reg]).?;
-                        var binder = BacktrackingPoint{
+                        const binder = BacktrackingPoint{
                             .out = bind.out_reg,
                             .next = self.index,
                             .searcher = EClassSearcher{

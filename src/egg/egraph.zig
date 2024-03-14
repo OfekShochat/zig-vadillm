@@ -249,7 +249,6 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             _ = self.union_find.merge(a, b);
             try self.dirty_ids.append(a); // submit a pending enode to repair
 
-
             var eclass1 = self.eclasses.getPtr(a).?;
             var eclass2 = self.eclasses.getPtr(b).?;
 
@@ -278,7 +277,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
             var iter = eclass.parents.iterator();
             while (iter.next()) |entry| {
-                var parent = entry.key_ptr;
+                const parent = entry.key_ptr;
 
                 std.debug.assert(self.memo.remove(parent.*));
                 self.canonicalize(parent);
@@ -293,7 +292,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
             iter = eclass.parents.iterator();
             while (iter.next()) |entry| {
-                var parent = entry.key_ptr;
+                const parent = entry.key_ptr;
                 self.canonicalize(parent);
 
                 if (visited_parents.get(parent.*)) |visited_parent| {
@@ -309,7 +308,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
         fn rebuild(self: *@This()) !void {
             while (self.dirty_ids.items.len > 0) {
-                var todo = try self.dirty_ids.toOwnedSlice();
+                const todo = try self.dirty_ids.toOwnedSlice();
                 for (todo) |eclass| {
                     try self.repair(self.find(eclass));
                 }

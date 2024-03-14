@@ -32,13 +32,13 @@ test "(add a a)" {
     var egraph = egg.EGraph(ToyLanguage, struct {}).init(std.testing.allocator);
     defer egraph.deinit();
 
-    var const1 = try egraph.addEclass(.{ .constant = 16 });
+    const const1 = try egraph.addEclass(.{ .constant = 16 });
     // var const2 = try egraph.addEclass(.{ .constant = 18 });
     _ = try egraph.addEclass(.{ .add = .{ const1, const1 } });
 
     const Program = egg.Program(ToyLanguage);
 
-    var pattern = Program.PatternAst{
+    const pattern = Program.PatternAst{
         .enode = .{
             .op = .add,
             .children = &.{ .{ .symbol = 0 }, .{ .symbol = 0 } },
@@ -62,13 +62,13 @@ test "saturate (add a a)" {
     var egraph = egg.EGraph(ToyLanguage, struct {}).init(std.testing.allocator);
     defer egraph.deinit();
 
-    var const1 = try egraph.addEclass(.{ .constant = 16 });
+    const const1 = try egraph.addEclass(.{ .constant = 16 });
     // var const2 = try egraph.addEclass(.{ .constant = 18 });
     _ = try egraph.addEclass(.{ .add = .{ const1, const1 } });
 
     const Program = egg.Program(ToyLanguage);
 
-    var pattern = Program.PatternAst{
+    const pattern = Program.PatternAst{
         .enode = .{
             .op = .add,
             .children = &.{ .{ .symbol = 0 }, .{ .symbol = 0 } },

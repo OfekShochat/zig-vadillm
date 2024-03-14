@@ -125,8 +125,12 @@ pub fn CfgBuilder(comptime L: type, graph: egg.Egraph, recexp: RecExpr) type {
 }
 
 test "test gammanode parsing" {
-    comptime var recexp = RecExpr(rvsdg.Node){ .expr = std.AutoArrayHashMap(egg.Id, rvsdg.Node).init(std.testing.allocator) };
-    try recexp.expr.putNoClobber(1, rvsdg.GamaNode{ .cond = 2, .paths = []u32{ 3, 5 }, .node_id = 1 });
+    comptime var recexp = RecExpr(rvsdg.Node){ .expr = std.AutoArrayHashMap(u32, rvsdg.Node).init(std.testing.allocator) };
+    var paths = [2]Id{ 2, 4 };
+    const gamanode = rvsdg.Node{ .gama = rvsdg.GamaNode{ .cond = 2, .paths = paths[0..], .node_id = 1 } };
+    //var paths_slice = paths.items[0..];
+    std.log.info(" {} ", .{gamanode});
+    try recexp.expr.put(4, gamanode);
     // 1.create rec expression
     // 2. call function
     // 3. profit
