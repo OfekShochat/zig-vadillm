@@ -10,6 +10,7 @@ const rvsdg = @import("ir/rvsdg.zig");
 const CFG = @import("../ControlFlowGraph.zig").ControlFlowGraph;
 const Block = @import("../function.zig").Block;
 const Instruction = @import("../instructions.zig").Instruction;
+const BinOp = @import("../instructions.zig").BinOp;
 
 // temporary recExpr object that is the same as the regular one,
 // we currently need it because extraction is not merged yet.
@@ -43,12 +44,17 @@ const Edge = struct {
 //    entry_point: Id,
 //};
 
-pub fn CfgBuilder(comptime L: type, graph: egg.Egraph, recexp: RecExpr) type {
+pub fn CfgBuilder(comptime L: type) type {
     return struct {
         cfg: CFG,
-        egraph: graph,
-        block_pool: std.ArrayList(Block(L)),
-        recExp: RecExpr = recexp,
+        block_pool: std.ArrayList(Block),
+        recExp: RecExpr(L),
+
+        pub fn init(recexp: RecExpr(L), allocator: std.mem.Allocator) @This() {
+            return @This(){ .recExp = recexp, .cfg = CFG{
+                .entry_ref = 0,
+            }, .block_pool = std.ArrayList(Block).init(allocator) };
+        }
 
         fn sliceIteratorByValue(iterator: *std.Iterator, value: L) !void {
             while (true) {
@@ -61,7 +67,7 @@ pub fn CfgBuilder(comptime L: type, graph: egg.Egraph, recexp: RecExpr) type {
             }
         }
 
-        pub fn parseGammaNode(self: *@This(), start_node: rvsdg.gama) void {
+        pub fn parseGammaNode(self: *@This(), start_node: rvsdg.GamaNode) void {
             // insert entry block
 
             const exit_block = BasicBlock();
@@ -69,7 +75,7 @@ pub fn CfgBuilder(comptime L: type, graph: egg.Egraph, recexp: RecExpr) type {
             var unified_instruction: L = null;
             var curr_block = Block(egg.Id);
             for (start_node.paths) |path| {
-                var node: rvsdg.Node = recexp.get(path);
+                var node: rvsdg.Node = self.recExp.get(path);
                 while (true) {
                     switch (node) {
                         rvsdg.simple => {
@@ -84,7 +90,7 @@ pub fn CfgBuilder(comptime L: type, graph: egg.Egraph, recexp: RecExpr) type {
                             // end of if statement
                             self.block_pool.append(curr_block);
                             self.cfg.addEdge(curr_block.ptr, exit_block.ptr);
-                            unified_instruction = recexp.get(node.unified_flow_node); //TODO: we wont get an egraph at this points, but a RecExpr, therefore we need to create a function that searches for specific ID inside the recexpr.
+                            unified_instruction = self.recExp.get(node.unified_flow_node); //TODO: we wont get an egraph at this points, but a RecExpr, therefore we need to create a function that searches for specific ID inside the recexpr.
                             break;
                         },
 
@@ -125,12 +131,23 @@ pub fn CfgBuilder(comptime L: type, graph: egg.Egraph, recexp: RecExpr) type {
 }
 
 test "test gammanode parsing" {
-    comptime var recexp = RecExpr(rvsdg.Node){ .expr = std.AutoArrayHashMap(u32, rvsdg.Node).init(std.testing.allocator) };
+    var recexp = comptime RecExpr(rvsdg.Node){ .expr = std.AutoArrayHashMap(u32, rvsdg.Node).init(std.testing.allocator) };
+    //var egraph = egg.EGraph(rvsdg.Node, rvsdg.Node).init(std.testing.allocator);
+    defer recexp.expr.deinit();
     var paths = [2]Id{ 2, 4 };
     const gamanode = rvsdg.Node{ .gama = rvsdg.GamaNode{ .cond = 2, .paths = paths[0..], .node_id = 1 } };
     //var paths_slice = paths.items[0..];
     std.log.info(" {} ", .{gamanode});
-    try recexp.expr.put(4, gamanode);
+    for (gamanode.gama.paths) |i| {
+        std.log.info("{}", .{i});
+    }
+
+    try recexp.expr.put(1, gamanode);
+    try recexp.expr.put(2, rvsdg.Node{ .simple = Instruction{ .add = BinOp{ .lhs = 12, .rhs = 12 } } });
+    try recexp.expr.put(4, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 10, .rhs = 2 } } });
+    const builder = CfgBuilder(rvsdg.Node).init(recexp, std.testing.allocator);
+    builder.parseGammaNode(gamanode);
+    //builder.parseGammaNode(recexp.expr.get(1));
     // 1.create rec expression
     // 2. call function
     // 3. profit

@@ -6,7 +6,7 @@ const Function = ir.Function;
 const Signature = ir.Signature;
 const HashSet = @import("hashset.zig").HashSet;
 
-const ControlFlowGraph = @This();
+pub const ControlFlowGraph = @This();
 
 pub const CFGNode = struct {
     preds: HashSet(Index) = .{},
