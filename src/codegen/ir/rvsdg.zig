@@ -113,7 +113,7 @@ pub const applyNode = struct {
     arguments: []Id,
 };
 
-pub const Node = union {
+pub const Node = union(enum) {
     simple: Instruction,
     gama: GamaNode,
     theta: ThetaNode,
