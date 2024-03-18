@@ -24,7 +24,7 @@ pub fn BasicBlock(comptime L: type) type {
 
         pub fn init(allocator: std.mem.Allocator) @This() {
             return @This(){
-                .instructions = std.ArrayList(allocator),
+                .instructions = std.ArrayList(L).init(allocator),
             };
         }
 
@@ -32,15 +32,15 @@ pub fn BasicBlock(comptime L: type) type {
             return self.instructions.items[self.instructions.items.len - 1];
         }
 
-        pub fn addInstruction(self: *@This(), inst: L) void {
-            self.instructions.append(inst);
+        pub fn addInstruction(self: *@This(), inst: L) !void {
+            try self.instructions.append(inst);
         }
     };
 }
 
 const Node = struct {
-    pred: std.ArrayList(u32),
-    succ: std.ArrayList(u32),
+    pred: []u32,
+    succ: []u32,
 };
 
 // const CFG = struct {
@@ -57,20 +57,20 @@ pub fn CFG(comptime L: type) type {
 
         pub fn init(allocator: std.mem.Allocator) @This() {
             return @This(){
-                .block_pool = std.HashMap(u32, BasicBlock(L)).init(allocator),
-                .tree = std.HashMap(u32, Node).init(allocator),
+                .block_pool = std.AutoHashMap(u32, BasicBlock(L)).init(allocator),
+                .tree = std.AutoHashMap(u32, Node).init(allocator),
                 .next_id = 0,
             };
         }
 
-        pub fn addNode(self: *@This(), node: Node, block: BasicBlock(L)) void {
-            self.block_pool.putNoClobber(self.next_id, block);
-            self.tree.putNoClobber(self.next_id, node);
+        pub fn addNode(self: @This(), node: Node, block: BasicBlock(L)) !void {
+            try self.block_pool.putNoClobber(self.next_id, block);
+            try self.tree.putNoClobber(self.next_id, node);
             self.next_id = self.next_id + 1;
         }
 
-        pub fn addBlock(self: *@This(), block: BasicBlock(L)) void {
-            self.block_pool.putNoClobber(self.next_id, block);
+        pub fn addBlock(self: *@This(), block: BasicBlock(L)) !void {
+            try self.block_pool.putNoClobber(self.next_id, block);
             self.next_id = self.next_id + 1;
         }
     };
@@ -87,18 +87,17 @@ pub fn CfgBuilder(comptime L: type) type {
             return @This(){ .recExp = recexp, .cfg = CFG(L).init(allocator), .block_pool = std.ArrayList(Block).init(allocator), .allocator = allocator };
         }
 
-        fn sliceIteratorByValue(iterator: std.AutoArrayHashMap(u32, L).Iterator, value: L) !void {
+        fn sliceIteratorByKey(iterator: *std.AutoArrayHashMap(u32, L).Iterator, key: u32) void {
             while (true) {
-                const next = iterator.next();
-                if (next.?.value_ptr.* == value) {
-                    return;
-                } else if (next == null) {
+                const next = iterator.next().?;
+
+                if (next.key_ptr.* == key) {
                     return;
                 }
             }
         }
 
-        pub fn parseGammaNode(self: @This(), start_node: rvsdg.GamaNode) void {
+        pub fn parseGammaNode(self: *@This(), start_node: rvsdg.GamaNode) !void {
             // insert entry block
 
             const exit_block = BasicBlock(L);
@@ -115,16 +114,18 @@ pub fn CfgBuilder(comptime L: type) type {
                             //    node,
                             //    0,
                             //);
-                            curr_block.addInstruction(node);
+                            try curr_block.addInstruction(node);
                             var iterator = self.recExp.expr.iterator();
-                            sliceIteratorByValue(iterator, node);
+                            sliceIteratorByKey(&iterator, path);
                             node = iterator.next().?.value_ptr.*;
                         },
 
                         rvsdg.Node.gamaExit => {
                             // end of if statement
-                            self.cfg.addBlock(curr_block);
-                            self.cfg.addEdge(curr_block.ptr, exit_block.ptr);
+                            try self.cfg.addBlock(curr_block);
+                            try self.cfg.addEdge(curr_block.ptr, exit_block.ptr);
+                            const cfg_node = Node{ .pred = []u32{curr_block.ptr}, .succ = []u32{exit_block.ptr} };
+                            self.cfg.addNode(cfg_node);
                             unified_instruction = self.recExp.get(node.unified_flow_node); //TODO: we wont get an egraph at this points, but a RecExpr, therefore we need to create a function that searches for specific ID inside the recexpr.
                             break;
                         },
@@ -180,8 +181,8 @@ test "test gammanode parsing" {
     try recexp.expr.put(1, gamanode);
     try recexp.expr.put(2, rvsdg.Node{ .simple = Instruction{ .add = BinOp{ .lhs = 12, .rhs = 12 } } });
     try recexp.expr.put(4, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 10, .rhs = 2 } } });
-    const builder = CfgBuilder(rvsdg.Node).init(recexp, std.testing.allocator);
-    builder.parseGammaNode(gamanode.gama);
+    var builder = CfgBuilder(rvsdg.Node).init(recexp, std.testing.allocator);
+    try builder.parseGammaNode(gamanode.gama);
     //builder.parseGammaNode(recexp.expr.get(1));
     // 1.create rec expression
     // 2. call function
