@@ -21,6 +21,7 @@ pub fn RecExpr(comptime L: type) type {
 pub fn BasicBlock(comptime L: type) type {
     return struct {
         instructions: std.ArrayList(L),
+        block_id: u32 = 0,
 
         pub fn init(allocator: std.mem.Allocator) @This() {
             return @This(){
@@ -82,6 +83,7 @@ pub fn CfgBuilder(comptime L: type) type {
         block_pool: std.ArrayList(Block),
         recExp: RecExpr(L),
         allocator: std.mem.Allocator,
+        curr_block_id: u32 = 0,
 
         pub fn init(recexp: RecExpr(L), allocator: std.mem.Allocator) @This() {
             return @This(){ .recExp = recexp, .cfg = CFG(L).init(allocator), .block_pool = std.ArrayList(Block).init(allocator), .allocator = allocator };
@@ -122,11 +124,17 @@ pub fn CfgBuilder(comptime L: type) type {
 
                         rvsdg.Node.gamaExit => {
                             // end of if statement
-                            try self.cfg.addBlock(curr_block);
-                            try self.cfg.addEdge(curr_block.ptr, exit_block.ptr);
-                            const cfg_node = Node{ .pred = []u32{curr_block.ptr}, .succ = []u32{exit_block.ptr} };
-                            self.cfg.addNode(cfg_node);
+                            //const edge = Node{ .pred = [_]u32{curr_block.ptr}[0..], .succ = [_]u32{exit_block.ptr}[0..] };
+                            const edge = Node{ .pred = &[1]u32{
+                                curr_block.block_id,
+                            }, .succ = &[1]u32{
+                                exit_block.block_id,
+                            }, .block_id = self.curr_block_id };
+                            try self.cfg.addNode(edge, curr_block);
+                            // const cfg_node = Node{ .pred = [_]u32{curr_block.ptr}, .succ = [_]u32{exit_block.ptr} };
+                            //self.cfg.addNode(cfg_node);
                             unified_instruction = self.recExp.get(node.unified_flow_node); //TODO: we wont get an egraph at this points, but a RecExpr, therefore we need to create a function that searches for specific ID inside the recexpr.
+                            self.curr_block_id += 1;
                             break;
                         },
 
