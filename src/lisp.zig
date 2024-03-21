@@ -200,7 +200,8 @@ test "lisp" {
         \\    (add arg0 arg1))
         \\
         \\(:def hello-adam2 int
-        \\    (add arg0 arg1))
+        \\    (add arg0 10))
+        \\
     ;
     var scope = try parse(std.testing.allocator, source);
     defer scope.deinit(std.testing.allocator);

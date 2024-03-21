@@ -1,12 +1,13 @@
 const std = @import("std");
 const regalloc = @import("regalloc.zig");
 const types = @import("../types.zig");
+const codegen = @import("../codegen.zig");
 
-const MachineFunction = @import("MachineFunction.zig");
 const IntervalTree = @import("interval_tree.zig").IntervalTree;
-const codegen = @import("codegen.zig");
-const Abi = @import("Abi.zig");
+const MachineFunction = @import("MachineFunction.zig");
 const SpillCostCalc = @import("SpillCostCalc.zig");
+const CodePoint = @import("CodePoint.zig");
+const Abi = @import("Abi.zig");
 
 const Self = @This();
 
@@ -129,6 +130,8 @@ fn calculateAllocations(self: *Self) ![]regalloc.LiveRange {
     var ranges = std.ArrayList(regalloc.LiveRange).init(self.allocator);
 
     var used = std.ArrayList(*regalloc.LiveRange).init(self.allocator);
+    defer used.deinit();
+
     for (self.live_unions.values) |live_union| {
         try live_union.collect(&used);
     }
@@ -165,10 +168,13 @@ fn assignPregToLiveInterval(self: *Self, live_interval: *regalloc.LiveInterval, 
 
 fn tryAssignMightEvict(self: *Self, live_range: *regalloc.LiveRange, interferences: []const *regalloc.LiveRange) Error!?regalloc.PhysicalReg {
     const live_union = self.live_unions.getPtrAssertContains(live_range.vreg.class());
+    const pregs = self.abi.getPregsByRegClass(live_range.vreg.class());
 
     var avail_pregs = std.AutoArrayHashMap(regalloc.PhysicalReg, bool).init(self.allocator);
+    try avail_pregs.ensureTotalCapacity(pregs.len);
+    defer avail_pregs.deinit();
 
-    for (self.abi.getPregsByRegClass(live_range.vreg.class()).?) |preg| {
+    for (pregs) |preg| {
         try avail_pregs.put(preg, true);
     }
 
@@ -295,17 +301,17 @@ fn tryEvict(
 }
 
 fn trySplitAndRequeue(self: *Self, live_range: *regalloc.LiveRange, interferences: []const *regalloc.LiveRange, spillcost_calc: *SpillCostCalc) !bool {
-    var first_point_of_intersection = codegen.CodePoint.invalidMax();
+    var first_point_of_intersection = CodePoint.invalidMax();
 
     for (interferences) |interference| {
         if (interference.start.isBefore(first_point_of_intersection)) {
-            first_point_of_intersection = codegen.CodePoint{
+            first_point_of_intersection = CodePoint{
                 .point = @max(interference.start.point, live_range.start.point),
             };
         }
     }
 
-    std.debug.assert(!std.meta.eql(first_point_of_intersection, codegen.CodePoint.invalidMax()));
+    std.debug.assert(!std.meta.eql(first_point_of_intersection, CodePoint.invalidMax()));
     std.debug.assert(live_range.start.isBeforeOrAt(first_point_of_intersection) and live_range.end.isAfterOrAt(first_point_of_intersection));
 
     const split_ranges = try self.splitAt(first_point_of_intersection, live_range.live_interval, spillcost_calc);
@@ -321,7 +327,7 @@ fn trySplitAndRequeue(self: *Self, live_range: *regalloc.LiveRange, interference
     return true;
 }
 
-fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInterval, spillcost_calc: *SpillCostCalc) !?[]regalloc.LiveRange {
+fn splitAt(self: *Self, at: CodePoint, live_interval: *regalloc.LiveInterval, spillcost_calc: *SpillCostCalc) !?[]regalloc.LiveRange {
     var found_idx: usize = undefined;
 
     for (live_interval.ranges, 0..) |range, i| {
@@ -446,7 +452,7 @@ fn splitAt(self: *Self, at: codegen.CodePoint, live_interval: *regalloc.LiveInte
     return split_ranges;
 }
 
-fn findNextUse(self: Self, from: codegen.CodePoint, live_range: *regalloc.LiveRange) !?codegen.CodePoint {
+fn findNextUse(self: Self, from: CodePoint, live_range: *regalloc.LiveRange) !?CodePoint {
     var operands = std.ArrayList(regalloc.Operand).init(self.allocator);
     defer operands.deinit();
 

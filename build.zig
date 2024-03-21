@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
@@ -14,6 +15,8 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+
+    const coverage = b.option(bool, "test-coverage", "Generate test coverage") orelse false;
 
     const exe = b.addExecutable(.{
         .name = "vadillm",
@@ -62,6 +65,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    if (coverage) {
+        unit_tests.setExecCmd(&[_]?[]const u8{
+            "kcov",
+            "kcov-output",
+            "--exclude-pattern=lib",
+            null,
+        });
+    }
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 

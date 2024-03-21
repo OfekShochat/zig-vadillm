@@ -198,20 +198,8 @@ fn getPregFromEncoding(preg: regalloc.PhysicalReg, size: regalloc.RegisterSize) 
     };
 }
 
-pub fn emitMov(buffer: *std.io.AnyWriter, from: regalloc.Allocation, to: regalloc.Allocation, size: regalloc.RegisterSize) !void {
-    try buffer.writeAll("mov ");
-
-    switch (from) {
-        .stack => |offset| try buffer.print("[rsp + {}]", .{offset.?}),
-        .preg => |preg| try buffer.writeAll(getPregFromEncoding(preg, size).?),
-    }
-
-    try buffer.writeAll(", ");
-
-    switch (to) {
-        .stack => |offset| try buffer.print("[rsp + {}]", .{offset.?}),
-        .preg => |preg| try buffer.writeAll(getPregFromEncoding(preg, size).?),
-    }
+pub fn emitMov(buffer: *std.io.AnyWriter, from: regalloc.Allocation, to: regalloc.Allocation) !void {
+    try buffer.print("mov {}, {}", .{ fmtAllocation(to), fmtAllocation(from) });
 }
 
 pub fn emitStackReserve(buffer: *std.io.AnyWriter, size: usize) !void {
@@ -262,8 +250,9 @@ pub const Inst = union(enum) {
         rhs: regalloc.VirtualReg,
         dst: regalloc.VirtualReg,
     },
+    // TODO: have values here
     ret: void,
-    syscall: struct { values: []const regalloc.VirtualReg },
+    syscall: []const regalloc.VirtualReg,
     push: struct { size: regalloc.RegisterSize, src: regalloc.VirtualReg },
     pop: struct { size: regalloc.RegisterSize, dst: regalloc.VirtualReg },
     push_imm32: u32,
@@ -271,7 +260,7 @@ pub const Inst = union(enum) {
     fn emitTextInterface(
         self: *const anyopaque,
         buffer: *std.io.AnyWriter,
-        mapping: std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.Allocation),
+        mapping: *const std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.Allocation),
     ) anyerror!void {
         return emitText(@ptrCast(@alignCast(self)), buffer, mapping);
     }
@@ -279,7 +268,7 @@ pub const Inst = union(enum) {
     pub fn emitText(
         self: *const Inst,
         buffer: *std.io.AnyWriter,
-        mapping: std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.Allocation),
+        mapping: *const std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.Allocation),
     ) !void {
         switch (self.*) {
             // TODO: infer movq/mov/movl for xmm registers etc
@@ -352,21 +341,39 @@ pub const Inst = union(enum) {
         }
     }
 
-    pub fn getAllocatableOperandsInterface(
-        self: *const anyopaque,
-        operands_out: *std.ArrayList(regalloc.Operand),
-    ) std.mem.Allocator.Error!void {
-        return getAllocatableOperands(@ptrCast(@alignCast(self)), operands_out);
-    }
-
-    pub fn getAllocatableOperands(self: *const Inst, operands_out: *std.ArrayList(regalloc.Operand)) !void {
-        _ = operands_out;
+    pub fn getAllocatableOperands(ctx: *const anyopaque, abi: Abi, operands_out: *std.ArrayList(regalloc.Operand)) !void {
+        const self: *const Inst = @ptrCast(@alignCast(ctx));
 
         switch (self.*) {
             .mov_rr,
             .mov_mr,
             .mov_rm,
             => {},
+            .mov => |mov| {
+                try operands_out.append(regalloc.Operand.init(mov.src, .use, .none, .early));
+                // hm, conditional constraints (mem->mem is disallowed)?
+                try operands_out.append(regalloc.Operand.init(mov.dst, .def, .none, .late));
+            },
+            .add => |add| {
+                try operands_out.append(regalloc.Operand.init(add.lhs, .use, .phys_reg, .early));
+                try operands_out.append(regalloc.Operand.init(add.rhs, .use, .phys_reg, .early));
+                // let the liveness put it in the same interval (it shouldn't be able to split in the middle of the instruction)
+                try operands_out.append(regalloc.Operand.init(add.dst, .def, .{ .reuse = 0 }, .late));
+            },
+            .mov_iv => |mov| try operands_out.append(regalloc.Operand.init(mov.dst, .def, .none, .late)),
+            .syscall => |values| {
+                const syscall_params = abi.call_conv.syscall_params;
+                var idx: usize = 0;
+
+                while (idx < values.len) : (idx += 1) {
+                    const constraint: regalloc.LocationConstraint = if (idx < syscall_params.len)
+                        .{ .fixed_reg = syscall_params[idx] }
+                    else
+                        .stack;
+
+                    try operands_out.append(regalloc.Operand.init(values[idx], .use, constraint, .early));
+                }
+            },
             else => {},
         }
     }
@@ -376,7 +383,6 @@ pub const Inst = union(enum) {
         allocated_size: usize,
         clobbered_callee_saved: []const regalloc.PhysicalReg,
     ) !void {
-        // (abi.call_conv.callee_saved)
         for (clobbered_callee_saved) |preg| {
             try buffer.print("  push {s}\n", .{getPregFromEncoding(
                 preg,
@@ -418,6 +424,14 @@ pub const Inst = union(enum) {
         return 0;
     }
 
+    fn clobbers(ctx: *const anyopaque, preg: regalloc.PhysicalReg) bool {
+        const self: *const Inst = @ptrCast(@alignCast(ctx));
+        _ = self;
+        _ = preg;
+
+        return false;
+    }
+
     // pub fn machInst(self: *const Inst) MachineInst {
     //     return MachineInst{
     //         .vtable = MachineInst.VTable{
@@ -431,14 +445,17 @@ pub const Inst = union(enum) {
     pub fn machInstReadable(self: *const Inst) MachineInst {
         return MachineInst{
             .vtable = MachineInst.VTable{
+                .clobbers = clobbers,
                 .emit = emitTextInterface,
-                .getAllocatableOperands = getAllocatableOperandsInterface,
+                .getAllocatableOperands = getAllocatableOperands,
                 .getStackDelta = getStackDeltaInterface,
             },
             .vptr = @ptrCast(self),
         };
     }
 };
+
+const MachineFunction = @import("MachineFunction.zig");
 
 test "emit" {
     const allocator = std.testing.allocator;
@@ -447,18 +464,59 @@ test "emit" {
     defer buffer.deinit();
 
     var gwriter = buffer.writer();
-    var writer = gwriter.any();
+    const writer = gwriter.any();
 
-    _ = Abi{
-        .int_pregs = &.{},
-        .float_pregs = &.{},
-        .vector_pregs = &.{},
+    // TODO: have preferred and not-preferred regs within the allocator (callee-saved regs for example)
+    // if a reg is used from the non-preferred regs, it is moved to the preferred regs. see, callee-saved
+    // regs.
+
+    const abi = Abi{
+        .int_pregs = &.{ rax, rbx, rcx, rdx, rdi, rsi, r8, r9, r10, r11, r12, r13, r14, r15 },
+        .float_pregs = &.{ st0, st1, st2, st3, st4, st5, st6, st7 },
+        .vector_pregs = &.{zmm0},
         .call_conv = .{
             .params = &.{ rdi, rsi, rdx, rcx, r8, r9 },
             .syscall_params = &.{ rax, rdi, rsi, rdx, r10, r8, r9 },
             .callee_saved = &.{ rbp, rbx, r12, r13, r14, r15 },
         },
     };
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    // var intervals = try arena.allocator().alloc(regalloc.LiveInterval, 2);
+
+    // var live_ranges = [_]regalloc.LiveRange{
+    //     .{
+    //         .start = .{ .point = 3 },
+    //         .end = .{ .point = 7 },
+    //         .spill_cost = 1,
+    //         .live_interval = &intervals[0],
+    //         .vreg = regalloc.VirtualReg{ .typ = types.I32, .index = 0 },
+    //         .uses = &.{.{ .point = 7 }},
+    //     },
+    //     .{
+    //         .start = .{ .point = 5 },
+    //         .end = .{ .point = 7 },
+    //         .spill_cost = 10,
+    //         .live_interval = &intervals[1],
+    //         .vreg = regalloc.VirtualReg{ .typ = types.I32, .index = 1 },
+    //         .uses = &.{.{ .point = 7 }},
+    //     },
+    //     .{
+    //         .start = .{ .point = 5 },
+    //         .end = .{ .point = 7 },
+    //         .spill_cost = 10,
+    //         .live_interval = &intervals[1],
+    //         .vreg = regalloc.VirtualReg{ .typ = types.I32, .index = 1 },
+    //         .uses = &.{.{ .point = 7 }},
+    //     },
+    // };
+
+    // const constraints = [_]regalloc.LocationConstraint{
+    //     .{ .fixed_reg = rdi },
+    //     .none,
+    // };
 
     const insts: []const Inst = &.{
         Inst{ .mov_mr = .{ .src = MemoryAddressing{
@@ -470,29 +528,118 @@ test "emit" {
         Inst{ .mov_iv = .{ .imm = 60, .dst = regalloc.VirtualReg{ .typ = types.I32, .index = 0 } } },
         Inst{ .mov_iv = .{ .imm = 32, .dst = regalloc.VirtualReg{ .typ = types.I32, .index = 1 } } },
         Inst{
-            .syscall = .{
-                .values = &.{
-                    regalloc.VirtualReg{ .typ = types.I32, .index = 0 },
-                    regalloc.VirtualReg{ .typ = types.I32, .index = 1 },
-                },
+            .syscall = &.{
+                regalloc.VirtualReg{ .typ = types.I32, .index = 0 },
+                regalloc.VirtualReg{ .typ = types.I32, .index = 1 },
             },
+        },
+        Inst{ .mov = .{
+            .src = regalloc.VirtualReg{ .typ = types.I32, .index = 1 },
+            .dst = regalloc.VirtualReg{ .typ = types.I32, .index = 2 },
+            .size = .@"8",
+        } },
+    };
+
+    var mach_insts = try allocator.alloc(MachineInst, insts.len);
+    defer allocator.free(mach_insts);
+
+    for (insts, 0..) |*inst, i| {
+        mach_insts[i] = inst.machInstReadable();
+    }
+
+    const func = MachineFunction{
+        .insts = mach_insts,
+        .params = &.{},
+        .block_headers = &.{
+            MachineFunction.BlockHeader{
+                .start = .{ .point = 0 },
+                .end = .{ .point = 8 },
+            },
+        },
+        .num_virtual_regs = 3,
+    };
+
+    var target = Target{
+        .vtable = Target.VTable{
+            .emitNops = emitNops,
+            .emitStitch = emitMov,
+            .emitPrologue = Inst.emitPrologueText,
+            .emitEpilogue = Inst.emitEpilogueText,
         },
     };
 
-    var mapping = std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.Allocation).init(allocator);
-    defer mapping.deinit();
+    const Object = @import("Object.zig");
+    var object = Object{
+        .code_buffer = writer,
+        .const_buffer = undefined,
+        .symtab = undefined,
+    };
 
-    try mapping.put(regalloc.VirtualReg{ .typ = types.I32, .index = 0 }, .{ .preg = rax });
-    try mapping.put(regalloc.VirtualReg{ .typ = types.I32, .index = 1 }, .{ .preg = rdi });
+    // var ranges = std.ArrayList(*regalloc.LiveRange).init(arena.allocator());
+    //
+    // for (0..live_ranges.len) |i| {
+    //     try ranges.append(&live_ranges[i]);
+    //
+    //     var current_ranges = try arena.allocator().alloc(*regalloc.LiveRange, 1);
+    //     current_ranges[0] = &live_ranges[i];
+    //     intervals[i] = .{
+    //         .ranges = current_ranges,
+    //         .constraints = constraints[i],
+    //         .allocation = null,
+    //     };
+    // }
 
-    try Inst.emitPrologueText(&writer, 10, &.{rbx});
+    // var solution = try regalloc.runRegalloc(@import("BacktrackingAllocator.zig"), arena.allocator(), abi, ranges.items);
+    // defer solution.deinit(arena.allocator());
 
-    for (insts) |*inst| {
-        try inst.emitText(&writer, mapping);
-    }
+    var cfg = @import("../ControlFlowGraph.zig"){ .entry_ref = 0 };
+    defer cfg.deinit(allocator);
+    try cfg.nodes.put(allocator, 0, @import("../ControlFlowGraph.zig").CFGNode{ .preds = .{}, .succs = .{} });
+    try cfg.computePostorder(allocator);
 
-    // The entry function should not generate an epilogue
-    try Inst.emitEpilogueText(&writer, 10, &.{rbx});
+    var liveness = @import("Liveness.zig").init(allocator);
+    defer liveness.deinit(allocator);
+    defer liveness.arena.deinit();
+    const lranges = try liveness.compute(allocator, &cfg, abi, &func);
 
+    var solution = try regalloc.runRegalloc(@import("BacktrackingAllocator.zig"), liveness.arena.allocator(), abi, lranges);
+    defer solution.deinit(liveness.arena.allocator());
+
+    var consumer = regalloc.SolutionConsumer.init(allocator, solution);
+    defer consumer.deinit();
+
+    // var mapping = std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.Allocation).init(allocator);
+    // defer mapping.deinit();
+    //
+    // try mapping.put(regalloc.VirtualReg{ .typ = types.I32, .index = 0 }, .{ .preg = rax });
+    // try mapping.put(regalloc.VirtualReg{ .typ = types.I32, .index = 1 }, .{ .preg = rdi });
+
+    try target.emit(allocator, &func, &consumer, abi, &object);
     std.debug.print("{s}\n", .{buffer.items});
+
+    // try Inst.emitPrologueText(&writer, 10, &.{rbx});
+    //
+    // for (insts) |*inst| {
+    //     try inst.emitText(&writer, &mapping);
+    // }
+    //
+    // // The entry function should not generate an epilogue
+    // try Inst.emitEpilogueText(&writer, 10, &.{rbx});
+
+    // TODO: reconsider the epilogues (glibc or not glibc?) This is about the ABI thing / lowering whatever
+
+    // try std.testing.expectEqualStrings(
+    //     \\  push rbx
+    //     \\  mov rbp, rsp
+    //     \\  sub rsp, 10
+    //     \\  mov rax, [rsp + rbx * 8 + 3]
+    //     \\  mov rax, 60
+    //     \\  mov rdi, 32
+    //     \\  syscall
+    //     \\  add rsp, 10
+    //     \\  pop rbx
+    //     \\  mov rsp, rbp
+    //     \\  ret
+    //     \\
+    // , buffer.items);
 }

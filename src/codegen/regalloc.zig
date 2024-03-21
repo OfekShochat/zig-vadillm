@@ -1,11 +1,12 @@
 const std = @import("std");
-const codegen = @import("codegen.zig");
+const codegen = @import("../codegen.zig");
 const types = @import("../types.zig");
 
-const Abi = @import("Abi.zig");
 const MachineFunction = @import("MachineFunction.zig");
 const SpillCostCalc = @import("SpillCostCalc.zig");
+const CodePoint = @import("CodePoint.zig");
 const Target = @import("Target.zig");
+const Abi = @import("Abi.zig");
 
 pub const RegClass = enum(u2) {
     int,
@@ -56,6 +57,20 @@ pub fn runRegalloc(comptime R: type, allocator: std.mem.Allocator, abi: Abi, liv
         std.log.err("{}", .{solution.formatSolution(allocator, abi)});
 
         return err;
+    }
+}
+
+pub fn getClobberedRegs(
+    func: *const MachineFunction,
+    live_ranges: []const LiveRange,
+    clobbered_out: *std.AutoArrayHashMap(PhysicalReg, void),
+) !void {
+    for (live_ranges) |live_range| {
+        if (live_range.preg()) |preg| {
+            if (func.getInst(live_range.start).?.clobbers(preg)) {
+                try clobbered_out.put(preg, void{});
+            }
+        }
     }
 }
 
@@ -160,7 +175,9 @@ pub const SolutionVisualizer = struct {
             while (self.ranges.popOrNull()) |range| {
                 if (range.rawStart() <= step) {
                     if (range.preg()) |preg| {
-                        _ = try std.fmt.bufPrint(row_buf[offsets.get(preg).?..], "{}", .{range.vreg});
+                        _ = try std.fmt.bufPrint(row_buf, "huh? {}\n", .{preg});
+                        return;
+                        // _ = try std.fmt.bufPrint(row_buf[offsets.get(preg).?..], "{}", .{range.vreg});
                     }
 
                     try active.append(range);
@@ -219,25 +236,44 @@ pub const SolutionVisualizer = struct {
 };
 
 pub const SolutionConsumer = struct {
+    // aren't owned
     stitches: []const Stitch,
+    // aren't owned
     ranges: []const LiveRange,
-    current: codegen.CodePoint,
-    mapping: std.AutoArrayHashMap(LiveRange, PhysicalReg),
+
+    // TODO: should this be 2? 0-1 reserved for parameters?
+    current: CodePoint = .{ .point = 0 },
+    out_mapping: std.AutoArrayHashMap(VirtualReg, Allocation),
+    mapping: std.AutoArrayHashMap(*const LiveRange, Allocation),
 
     pub const SolutionPoint = struct {
-        mapping: *std.AutoHashMap(VirtualReg, PhysicalReg),
+        mapping: *std.AutoArrayHashMap(VirtualReg, Allocation),
         stitches: []const Stitch,
     };
+
+    pub fn init(allocator: std.mem.Allocator, solution: Solution) SolutionConsumer {
+        return SolutionConsumer{
+            .stitches = solution.stitches,
+            .ranges = solution.allocations,
+            .out_mapping = std.AutoArrayHashMap(VirtualReg, Allocation).init(allocator),
+            .mapping = std.AutoArrayHashMap(*const LiveRange, Allocation).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *SolutionConsumer) void {
+        self.out_mapping.deinit();
+        self.mapping.deinit();
+    }
 
     pub fn advance(self: *SolutionConsumer) !SolutionPoint {
         try self.advanceActive();
 
-        const stitches = try self.advanceStitches();
+        const stitches = self.advanceStitches();
 
         self.current = self.current.getNextInst();
 
         return SolutionPoint{
-            .mapping = &self.mapping,
+            .mapping = &self.out_mapping,
             .stitches = stitches,
         };
     }
@@ -252,7 +288,7 @@ pub const SolutionConsumer = struct {
         var end: usize = 0;
         for (self.stitches) |stitch| {
             end += 1;
-            if (!stitch.code_point.isSame(self.current)) break;
+            if (!stitch.codepoint.isSame(self.current)) break;
         }
 
         defer self.stitches = self.stitches[end..];
@@ -260,24 +296,26 @@ pub const SolutionConsumer = struct {
         return self.stitches[0..end];
     }
 
-    fn advanceActive(self: *SolutionConsumer) ![]const LiveRange {
+    fn advanceActive(self: *SolutionConsumer) !void {
         var i: usize = 0;
-        while (i < self.mapping.values().len) {
-            if (self.current.isAfter(self.mapping.values().end)) {
-                _ = self.mapping.orderedRemove(i);
+        while (i < self.mapping.keys().len) {
+            if (self.current.isAfter(self.mapping.keys()[i].end)) {
+                _ = self.mapping.orderedRemoveAt(i);
+                _ = self.out_mapping.orderedRemoveAt(i);
             } else {
                 i += 1;
             }
         }
 
         var index: usize = 0;
-
-        while (index < self.ranges.len) {
-            const range = self.ranges[index];
-            if (range.start.isBeforeOrAt(self.current)) {
-                try self.mapping.put(range.vreg(), range);
-                index += 1;
+        while (index < self.ranges.len) : (index += 1) {
+            const range = &self.ranges[index];
+            if (range.start.isAfter(self.current.getLate())) {
+                break;
             }
+
+            try self.mapping.put(range, range.live_interval.allocation.?);
+            try self.out_mapping.put(range.vreg, range.live_interval.allocation.?);
         }
 
         self.ranges = self.ranges[index..];
@@ -354,16 +392,16 @@ pub const Solution = struct {
     allocations: []const LiveRange,
     stitches: []const Stitch,
 
-    pub fn deinit(self: *Solution, allocator: std.mem.Allocator) void {
-        allocator.free(self.allocations);
-        allocator.free(self.stitches);
-    }
-
     const FormatContext = struct {
         solution: Solution,
         allocator: std.mem.Allocator,
         abi: Abi,
     };
+
+    pub fn deinit(self: *Solution, allocator: std.mem.Allocator) void {
+        allocator.free(self.allocations);
+        allocator.free(self.stitches);
+    }
 
     pub fn formatSolution(solution: Solution, allocator: std.mem.Allocator, abi: Abi) std.fmt.Formatter(visualize) {
         return .{ .data = .{
@@ -388,6 +426,7 @@ pub const Solution = struct {
         const stitches = try discoverStitches(allocator, allocations);
         _ = func;
         // try assignStackSlotsToStitches(func, stitches);
+        std.sort.block(LiveRange, allocations, void{}, LiveRange.lessThan);
 
         return Solution{
             .allocations = allocations,
@@ -470,22 +509,20 @@ pub const Operand = struct {
     //! 00000010 => stack
     //! 1xxxxxxx => fixed_reg{xxxxxxx}
     //! 01xxxxxx => reuse{xxxxxx}
-    bits: u32,
+    bits: u64,
 
-    pub fn init(vreg: VirtualReg, access_type: AccessType, constraints: LocationConstraint, operand_use: OperandUseTiming) Operand {
-        std.debug.assert(vreg.index < (1 << 20));
-
+    pub fn init(v: VirtualReg, access_type: AccessType, constraints: LocationConstraint, operand_use: OperandUseTiming) Operand {
         return Operand{
-            .bits = vreg.index |
-                (@as(u32, @intFromEnum(vreg.class())) << 20) |
-                (@as(u32, @intFromEnum(operand_use)) << 22) |
-                (@as(u32, @intFromEnum(access_type)) << 23) |
-                (@as(u32, constraints.asBytes()) << 24),
+            .bits = @as(u64, v.index) |
+                (@as(u64, v.typ.val) << 32) |
+                (@as(u64, @intFromEnum(operand_use)) << 48) |
+                (@as(u64, @intFromEnum(access_type)) << 49) |
+                (@as(u64, constraints.asBytes()) << 50),
         };
     }
 
     pub fn locationConstraints(self: Operand) LocationConstraint {
-        const constraints = (self.bits >> 24) & 0xFF;
+        const constraints = (self.bits >> 50) & 0xFF;
 
         if (constraints & 0b10000000 != 0) {
             return LocationConstraint{ .fixed_reg = .{
@@ -505,19 +542,30 @@ pub const Operand = struct {
     }
 
     pub fn regclass(self: Operand) RegClass {
-        return @enumFromInt((self.bits >> 20) & 0b11);
+        return self.vreg().class();
+    }
+
+    pub fn typ(self: Operand) types.Type {
+        return types.Type{ .val = @intCast((self.bits >> 32) & 0xFFFF) };
+    }
+
+    pub fn vreg(self: Operand) VirtualReg {
+        return VirtualReg{
+            .index = self.vregIndex(),
+            .typ = self.typ(),
+        };
     }
 
     pub fn operandUse(self: Operand) OperandUseTiming {
-        return @enumFromInt((self.bits >> 22) & 0b1);
+        return @enumFromInt((self.bits >> 48) & 0b1);
     }
 
     pub fn accessType(self: Operand) AccessType {
-        return @enumFromInt((self.bits >> 23) & 0b1);
+        return @enumFromInt((self.bits >> 49) & 0b1);
     }
 
     pub fn vregIndex(self: Operand) u32 {
-        return self.bits & 0x3FF;
+        return @intCast(self.bits & 0xFFFFFFFF);
     }
 };
 
@@ -528,19 +576,19 @@ pub const Allocation = union(enum) {
 };
 
 pub const Stitch = struct {
-    codepoint: codegen.CodePoint,
+    codepoint: CodePoint,
     from: Allocation,
     to: Allocation,
 };
 
 pub const LiveRange = struct {
-    start: codegen.CodePoint,
-    end: codegen.CodePoint,
+    start: CodePoint,
+    end: CodePoint,
     live_interval: *LiveInterval,
-    uses: []const codegen.CodePoint,
-    spill_cost: usize,
+    uses: []const CodePoint,
     vreg: VirtualReg,
 
+    spill_cost: usize = 0,
     split_count: u8 = 0,
     evicted_count: u8 = 0,
 

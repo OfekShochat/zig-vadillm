@@ -22,7 +22,7 @@ float_pregs: []const PhysicalReg,
 vector_pregs: []const PhysicalReg,
 call_conv: CallConv,
 
-pub fn getPregsByRegClass(self: Abi, class: RegClass) ?[]const PhysicalReg {
+pub fn getPregsByRegClass(self: Abi, class: RegClass) []const PhysicalReg {
     return switch (class) {
         .int => self.int_pregs,
         .float => self.float_pregs,
@@ -38,14 +38,4 @@ pub fn getAllPregs(self: Abi, allocator: std.mem.Allocator) ![]const PhysicalReg
     try all_pregs.appendSlice(self.vector_pregs);
 
     return all_pregs.toOwnedSlice();
-
-    // if (self.float_pregs) |pregs| {
-    //     try all_pregs.appendSlice(pregs);
-    // }
-    //
-    // if (self.vector_pregs) |pregs| {
-    //     try all_pregs.appendSlice(pregs);
-    // }
-    //
-    // return all_pregs.toOwnedSlice();
 }
