@@ -30,6 +30,10 @@ pub fn BasicBlock(comptime L: type) type {
             };
         }
 
+        pub fn deinit(self: *@This()) void {
+            self.instructions.deinit();
+        }
+
         pub fn getTeminator(self: *@This()) L {
             return self.instructions.items[self.instructions.items.len - 1];
         }
@@ -62,6 +66,21 @@ pub fn CFG(comptime L: type) type {
             };
         }
 
+        pub fn deinit(self: *@This()) void {
+            self.tree.deinit();
+
+            var iterator = self.block_pool.valueIterator();
+            while (true) {
+                if (iterator.next()) |block| {
+                    block.deinit();
+                } else {
+                    break;
+                }
+            }
+
+            self.block_pool.deinit();
+        }
+
         pub fn addNode(self: *@This(), node: Node, block: BasicBlock(L)) !void {
             try self.block_pool.putNoClobber(self.next_id, block);
             try self.tree.putNoClobber(self.next_id, node);
@@ -87,9 +106,15 @@ pub fn CfgBuilder(comptime L: type) type {
             return @This(){ .recExp = recexp, .cfg = CFG(L).init(allocator), .block_pool = std.ArrayList(Block).init(allocator), .allocator = allocator };
         }
 
+        pub fn deinit(self: *@This()) void {
+            self.cfg.deinit();
+            self.block_pool.deinit();
+        }
+
         fn sliceIteratorByKey(iterator: *std.AutoArrayHashMap(u32, L).Iterator, key: u32) void {
             while (true) {
                 const next = iterator.next().?;
+                std.log.warn("next in iterator: key {}, desired key {}", .{ next.key_ptr.*, key });
 
                 if (next.key_ptr.* == key) {
                     return;
@@ -99,30 +124,41 @@ pub fn CfgBuilder(comptime L: type) type {
 
         pub fn parseGammaNode(self: *@This(), start_node: rvsdg.GamaNode) !void {
             // insert entry block
-
+            std.log.warn("hello world", .{});
             const exit_block = BasicBlock(L).init(self.allocator);
             //exit_block.append(rvsdg.OptBarrier);
             var unified_instruction: L = self.recExp.expr.get(start_node.paths[0]).?;
             var curr_block = BasicBlock(L).init(self.allocator);
+            var keep_iterating = true;
             for (start_node.paths) |path| {
                 var node: rvsdg.Node = self.recExp.expr.get(path).?;
-                while (true) {
+                std.log.warn("path: {}", .{path});
+                while (keep_iterating) {
                     switch (node) {
                         rvsdg.Node.simple => {
+                            std.log.warn("simple node: {}", .{node.simple});
                             // non-terminating instruction, add to block
                             //curr_block.addInstruction(
                             //    node,
                             //    0,
                             //);
-                            std.log.info("simple node: {}", .{node});
+                            //std.log.info("simple node: {}", .{node});
                             try curr_block.addInstruction(node);
                             var iterator = self.recExp.expr.iterator();
                             sliceIteratorByKey(&iterator, path);
-                            node = iterator.next().?.value_ptr.*;
+                            var next = iterator.next();
+                            if (next == null) {
+                                keep_iterating = false;
+                                break;
+                            }
+
+                            node = next.?.value_ptr.*;
+                            break;
                         },
 
                         rvsdg.Node.gamaExit => {
                             std.log.info("gamaExit: {}", .{node});
+                            keep_iterating = false;
                             // end of if statement
                             //const edge = Node{ .pred = [_]u32{curr_block.ptr}[0..], .succ = [_]u32{exit_block.ptr}[0..] };
                             const edge = Node{ .pred = &([1]u32{
@@ -131,7 +167,7 @@ pub fn CfgBuilder(comptime L: type) type {
                                 exit_block.block_id,
                             }) };
                             try self.cfg.addNode(edge, curr_block);
-                            // const cfg_node = Node{ .pred = [_]u32{curr_block.ptr}, .succ = [_]u32{exit_block.ptr} };
+                            //const cfg_node = Node{ .pred = [_]u32{curr_block.ptr}, .succ = [_]u32{exit_block.ptr} };
                             //self.cfg.addNode(cfg_node);
                             unified_instruction = self.recExp.expr.get(node.gamaExit.unified_flow_node).?; //TODO: we wont get an egraph at this points, but a RecExpr, therefore we need to create a function that searches for specific ID inside the recexpr.
                             self.curr_block_id += 1;
@@ -139,8 +175,10 @@ pub fn CfgBuilder(comptime L: type) type {
                         },
 
                         rvsdg.Node.gama => {
+                            std.log.warn("gamanode: {}", .{node.gama});
                             try self.cfg.addBlock(curr_block);
                             try self.parseGammaNode(node.gama);
+                            break;
                         },
 
                         rvsdg.Node.theta => {},
@@ -152,6 +190,7 @@ pub fn CfgBuilder(comptime L: type) type {
                         rvsdg.Node.omega => {},
 
                         else => {
+                            std.log.warn("block is corrupted?", .{});
                             //block is corrupted?
                         },
                     }
@@ -191,6 +230,7 @@ test "test gammanode parsing" {
     try recexp.expr.put(2, rvsdg.Node{ .simple = Instruction{ .add = BinOp{ .lhs = 12, .rhs = 12 } } });
     try recexp.expr.put(4, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 10, .rhs = 2 } } });
     var builder = CfgBuilder(rvsdg.Node).init(recexp, std.testing.allocator);
+    defer builder.deinit();
     std.log.warn("hello world", .{});
     try builder.parseGammaNode(gamanode.gama);
     //builder.parseGammaNode(recexp.expr.get(1));
