@@ -21,50 +21,48 @@ liveins: std.AutoHashMap(codegen.Index, std.DynamicBitSetUnmanaged),
 // map from a block to all the live-out values in the block
 liveouts: std.AutoHashMap(codegen.Index, std.DynamicBitSetUnmanaged),
 
-arena: std.heap.ArenaAllocator,
+allocator: std.mem.Allocator,
 
 pub fn init(allocator: std.mem.Allocator) Liveness {
     return Liveness{
         .liveins = std.AutoHashMap(codegen.Index, std.DynamicBitSetUnmanaged).init(allocator),
         .liveouts = std.AutoHashMap(codegen.Index, std.DynamicBitSetUnmanaged).init(allocator),
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .allocator = allocator,
     };
 }
 
-pub fn deinit(self: *Liveness, allocator: std.mem.Allocator) void {
+pub fn deinit(self: *Liveness) void {
     var iter = self.liveins.valueIterator();
     while (iter.next()) |v| {
-        v.deinit(allocator);
+        v.deinit(self.allocator);
     }
     self.liveins.deinit();
     iter = self.liveouts.valueIterator();
     while (iter.next()) |v| {
-        v.deinit(allocator);
+        v.deinit(self.allocator);
     }
     self.liveouts.deinit();
 }
 
 pub fn compute(
     self: *Liveness,
-    allocator: std.mem.Allocator,
     cfg: *const ControlFlowGraph,
     abi: Abi,
     func: *const MachineFunction,
 ) ![]const *regalloc.LiveRange {
-    try self.computeLiveSets(allocator, abi, cfg, func);
-    return self.computeLiveRanges(self.arena.allocator(), abi, func);
+    try self.computeLiveSets(abi, cfg, func);
+    return self.computeLiveRanges(abi, func);
 }
 
 fn upAndMark(
     self: *Liveness,
-    allocator: std.mem.Allocator,
     func: *const MachineFunction,
     abi: Abi,
     cfg: *const ControlFlowGraph,
     block_ref: codegen.Index,
     v: codegen.Index,
 ) !void {
-    var operands = std.ArrayList(regalloc.Operand).init(allocator);
+    var operands = std.ArrayList(regalloc.Operand).init(self.allocator);
     defer operands.deinit();
 
     const block = func.getBlock(block_ref).?;
@@ -87,25 +85,17 @@ fn upAndMark(
     // 4: LiveIn(B) = LiveIn(B) ∪ {v}
     liveins.set(v);
 
-    // 5: if v ∈ PhiDefs(B) then return # Do not propagate φ definitions
-    // for (block.params) |param| {
-    //     if (param.index == v) {
-    //         return;
-    //     }
-    // }
-
     // 6: for each P ∈ CFG_preds(B) do # Propagate backward
     for (cfg.getPreds(block_ref).?.iter()) |pred_ref| {
         // 7: LiveOut(P) = LiveOut(P ) ∪ {v}
         // 8: Up_and_Mark(B, v)
         self.liveouts.getPtr(pred_ref).?.set(v);
-        try self.upAndMark(allocator, func, abi, cfg, block_ref, v);
+        try self.upAndMark(func, abi, cfg, block_ref, v);
     }
 }
 
 fn computeLiveSets(
     self: *Liveness,
-    allocator: std.mem.Allocator,
     abi: Abi,
     cfg: *const ControlFlowGraph,
     func: *const MachineFunction,
@@ -116,28 +106,17 @@ fn computeLiveSets(
     for (cfg.rpo.items) |block_ref| {
         const block = func.getBlock(block_ref).?;
 
-        // // 3: for each v ∈ PhiUses(B) do # Used in the φ of a successor block
-        // for (block.succ_phis) |block_call| {
-        //     // 3: for each v ∈ PhiUses(B) do # Used in the φ of a successor block
-        //     for (block_call.operands) |operand| {
-        //         // 4: LiveOut(B) = LiveOut(B) ∪ {v}
-        //         // 5: Up_and_Mark(B, v)
-        //         self.liveouts.getPtr(block_ref).?.set(operand);
-        //         self.upAndMark(func, block_ref, operand);
-        //     }
-        // }
-
         try self.liveins.put(block.id, try std.DynamicBitSetUnmanaged.initEmpty(
-            allocator,
+            self.allocator,
             func.num_virtual_regs,
         ));
 
         try self.liveouts.put(block.id, try std.DynamicBitSetUnmanaged.initEmpty(
-            allocator,
+            self.allocator,
             func.num_virtual_regs,
         ));
 
-        var operands = std.ArrayList(regalloc.Operand).init(allocator);
+        var operands = std.ArrayList(regalloc.Operand).init(self.allocator);
         defer operands.deinit();
 
         for (block.insts) |inst| {
@@ -147,7 +126,7 @@ fn computeLiveSets(
             for (operands.items) |operand| {
                 if (operand.accessType() == .use) {
                     // 7: Up_and_Mark(B, v)
-                    try self.upAndMark(allocator, func, abi, cfg, block_ref, operand.vregIndex());
+                    try self.upAndMark(func, abi, cfg, block_ref, operand.vregIndex());
                 }
             }
             operands.clearRetainingCapacity();
@@ -165,14 +144,13 @@ const LiveRangeBuilder = struct {
 
 fn computeLiveRanges(
     self: *Liveness,
-    allocator: std.mem.Allocator,
     abi: Abi,
     func: *const MachineFunction,
 ) ![]const *regalloc.LiveRange {
-    var operands_temp = std.ArrayList(regalloc.Operand).init(allocator);
+    var operands_temp = std.ArrayList(regalloc.Operand).init(self.allocator);
     defer operands_temp.deinit();
 
-    var live_ranges = std.ArrayList(*regalloc.LiveRange).init(allocator);
+    var live_ranges = std.ArrayList(*regalloc.LiveRange).init(self.allocator);
 
     var blocks_iter = func.reverseBlockIter();
     while (blocks_iter.next()) |block| {
@@ -180,7 +158,7 @@ fn computeLiveRanges(
 
         const liveout = self.liveouts.get(block.id).?;
 
-        var ranges_in_flight = std.AutoArrayHashMap(codegen.Index, LiveRangeBuilder).init(allocator);
+        var ranges_in_flight = std.AutoArrayHashMap(codegen.Index, LiveRangeBuilder).init(self.allocator);
         defer ranges_in_flight.deinit();
 
         var insts_iter = std.mem.reverseIterator(block.insts);
@@ -193,7 +171,7 @@ fn computeLiveRanges(
                 const entry = try ranges_in_flight.getOrPutValue(
                     operand.vregIndex(),
                     LiveRangeBuilder{
-                        .uses = std.ArrayList(CodePoint).init(allocator),
+                        .uses = std.ArrayList(CodePoint).init(self.allocator),
                         .vreg = operand.vreg(),
                         .constraint = operand.locationConstraints(),
                     },
@@ -211,7 +189,7 @@ fn computeLiveRanges(
                 }
 
                 if (operand.locationConstraints() == .reuse) {
-                    // somehow add it to the same interval.
+                    // TODO: somehow add it to the same interval.
                 }
 
                 if (liveout.isSet(operand.vregIndex())) {
@@ -223,15 +201,15 @@ fn computeLiveRanges(
         }
 
         for (ranges_in_flight.values()) |*builder| {
-            const ranges = try allocator.alloc(*regalloc.LiveRange, 1);
-            const interval = try allocator.create(regalloc.LiveInterval);
+            const ranges = try self.allocator.alloc(*regalloc.LiveRange, 1);
+            const interval = try self.allocator.create(regalloc.LiveInterval);
             interval.* = .{
                 .allocation = null,
                 .ranges = ranges,
                 .constraints = builder.constraint,
             };
 
-            const range = try allocator.create(regalloc.LiveRange);
+            const range = try self.allocator.create(regalloc.LiveRange);
             range.* = regalloc.LiveRange{
                 .vreg = builder.vreg,
                 .start = builder.start,

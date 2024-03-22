@@ -4,8 +4,10 @@ const types = @import("../types.zig");
 
 const MachineFunction = @import("MachineFunction.zig");
 const SpillCostCalc = @import("SpillCostCalc.zig");
+const ControlFlowGraph = @import("../ControlFlowGraph.zig");
 const CodePoint = @import("CodePoint.zig");
 const Target = @import("Target.zig");
+const Liveness = @import("Liveness.zig");
 const Abi = @import("Abi.zig");
 
 pub const RegClass = enum(u2) {
@@ -30,31 +32,37 @@ pub const RegisterSize = enum {
     @"128",
 };
 
-// TODO: give it the function, it would calculate costs and liveranges then pass it to the regallocator
-pub fn runRegalloc(comptime R: type, allocator: std.mem.Allocator, abi: Abi, live_ranges: []const *LiveRange) !Solution {
-    const func: *const MachineFunction = undefined;
-
+pub fn runRegalloc(
+    comptime R: type,
+    arena: *std.heap.ArenaAllocator,
+    cfg: *const ControlFlowGraph,
+    abi: Abi,
+    func: *const MachineFunction,
+    target: Target,
+) !Solution {
     var spillcost_calc: SpillCostCalc = undefined;
 
-    // var liveness = Liveness.init(func);
-    // const live_ranges = liveness.compute();
+    var liveness = Liveness.init(arena.allocator());
+    const live_ranges = try liveness.compute(cfg, abi, func);
 
-    var regalloc = R.init(allocator, abi);
+    defer liveness.deinit();
+
+    var regalloc = R.init(arena.allocator(), abi);
     defer regalloc.deinit();
 
     if (regalloc.run(live_ranges, &spillcost_calc)) |output| {
-        const solution = try Solution.fromAllocatedRanges(allocator, output, func);
+        const solution = try Solution.fromAllocatedRanges(arena.allocator(), output, func, target);
 
         std.log.debug("regalloc found a solution:", .{});
-        std.log.debug("{}", .{solution.formatSolution(allocator, abi)});
+        std.log.debug("{}", .{solution.formatSolution(arena.allocator(), abi)});
 
         return solution;
     } else |err| {
         const inter_output = try regalloc.getIntermediateSolution();
-        const solution = try Solution.fromAllocatedRanges(allocator, inter_output, func);
+        const solution = try Solution.fromAllocatedRanges(arena.allocator(), inter_output, func, target);
 
         std.log.err("regalloc encountered an error: {}.", .{err});
-        std.log.err("{}", .{solution.formatSolution(allocator, abi)});
+        std.log.err("{}", .{solution.formatSolution(arena.allocator(), abi)});
 
         return err;
     }
@@ -360,12 +368,22 @@ fn discoverStitches(allocator: std.mem.Allocator, allocated_ranges: []LiveRange)
     return stitches.toOwnedSlice();
 }
 
-/// `stitches` should be ordered by codepoint.
-fn assignStackSlotsToStitches(func: *const MachineFunction, stitches: []Stitch, target: Target) !void {
+fn assignStackSlots(
+    allocator: std.mem.Allocator,
+    func: *const MachineFunction,
+    stitches: []Stitch,
+    allocations: []LiveRange,
+    target: Target,
+) !void {
     var idx: usize = 0;
 
     // Should never go negative in valid code.
     var delta: isize = 0;
+
+    var allocations_slice = allocations;
+
+    var active = std.ArrayList(LiveRange).init(allocator);
+    defer active.deinit();
 
     var iter = func.blockIter();
     while (iter.next()) |block| {
@@ -374,14 +392,37 @@ fn assignStackSlotsToStitches(func: *const MachineFunction, stitches: []Stitch, 
         for (block.insts) |inst| {
             std.debug.assert(delta >= 0);
 
-            while (stitches[idx].codepoint.isSame(current)) : (idx += 1) {
+            while (idx < stitches.len and stitches[idx].codepoint.isSame(current)) : (idx += 1) {
                 if (stitches[idx].to == .stack) {
                     // TODO: should this always be `word_size`?
-                    delta += target.word_size;
                     stitches[idx].to = .{ .stack = @intCast(delta) };
+                    delta += @intCast(target.word_size);
                 }
             }
 
+            var i: usize = 0;
+            while (i < active.items.len) {
+                if (current.isAfter(active.items[i].end)) {
+                    _ = active.orderedRemove(i);
+                } else {
+                    i += 1;
+                }
+            }
+
+            i = 0;
+            while (i < allocations_slice.len) : (i += 1) {
+                const range = &allocations_slice[i];
+                if (range.start.isAfter(current.getLate())) {
+                    break;
+                }
+
+                if (range.preg() == null) {
+                    range.live_interval.allocation = .{ .stack = @intCast(delta) };
+                    delta += @intCast(target.word_size);
+                }
+            }
+
+            allocations_slice = allocations_slice[i..];
             delta += inst.getStackDelta();
             current = current.getNextInst();
         }
@@ -422,10 +463,15 @@ pub const Solution = struct {
         visualizer.print(writer) catch @panic("OOM or Writer");
     }
 
-    pub fn fromAllocatedRanges(allocator: std.mem.Allocator, allocations: []LiveRange, func: *const MachineFunction) !Solution {
+    pub fn fromAllocatedRanges(
+        allocator: std.mem.Allocator,
+        allocations: []LiveRange,
+        func: *const MachineFunction,
+        target: Target,
+    ) !Solution {
         const stitches = try discoverStitches(allocator, allocations);
-        _ = func;
-        // try assignStackSlotsToStitches(func, stitches);
+        try assignStackSlots(allocator, func, stitches, allocations, target);
+
         std.sort.block(LiveRange, allocations, void{}, LiveRange.lessThan);
 
         return Solution{

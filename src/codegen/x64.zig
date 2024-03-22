@@ -37,6 +37,17 @@ const st7 = regalloc.PhysicalReg{ .class = .float, .encoding = 7 };
 // ymm and xmm are contained here
 const zmm0 = regalloc.PhysicalReg{ .class = .vector, .encoding = 0 };
 
+pub const systemv_abi = Abi{
+    .int_pregs = &.{ rax, rbx, rcx, rdx, rdi, rsi, r8, r9, r10, r11, r12, r13, r14, r15 },
+    .float_pregs = &.{ st0, st1, st2, st3, st4, st5, st6, st7 },
+    .vector_pregs = &.{zmm0},
+    .call_conv = .{
+        .params = &.{ rdi, rsi, rdx, rcx, r8, r9 },
+        .syscall_params = &.{ rax, rdi, rsi, rdx, r10, r8, r9 },
+        .callee_saved = &.{ rbp, rbx, r12, r13, r14, r15 },
+    },
+};
+
 const preg_sizes = blk: {
     var sizes = std.EnumMap(regalloc.RegClass, regalloc.RegisterSize){};
 
@@ -350,7 +361,7 @@ pub const Inst = union(enum) {
             .mov_rm,
             => {},
             .mov => |mov| {
-                try operands_out.append(regalloc.Operand.init(mov.src, .use, .none, .early));
+                try operands_out.append(regalloc.Operand.init(mov.src, .use, .stack, .early));
                 // hm, conditional constraints (mem->mem is disallowed)?
                 try operands_out.append(regalloc.Operand.init(mov.dst, .def, .none, .late));
             },
@@ -470,53 +481,10 @@ test "emit" {
     // if a reg is used from the non-preferred regs, it is moved to the preferred regs. see, callee-saved
     // regs.
 
-    const abi = Abi{
-        .int_pregs = &.{ rax, rbx, rcx, rdx, rdi, rsi, r8, r9, r10, r11, r12, r13, r14, r15 },
-        .float_pregs = &.{ st0, st1, st2, st3, st4, st5, st6, st7 },
-        .vector_pregs = &.{zmm0},
-        .call_conv = .{
-            .params = &.{ rdi, rsi, rdx, rcx, r8, r9 },
-            .syscall_params = &.{ rax, rdi, rsi, rdx, r10, r8, r9 },
-            .callee_saved = &.{ rbp, rbx, r12, r13, r14, r15 },
-        },
-    };
+    const abi = systemv_abi;
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-
-    // var intervals = try arena.allocator().alloc(regalloc.LiveInterval, 2);
-
-    // var live_ranges = [_]regalloc.LiveRange{
-    //     .{
-    //         .start = .{ .point = 3 },
-    //         .end = .{ .point = 7 },
-    //         .spill_cost = 1,
-    //         .live_interval = &intervals[0],
-    //         .vreg = regalloc.VirtualReg{ .typ = types.I32, .index = 0 },
-    //         .uses = &.{.{ .point = 7 }},
-    //     },
-    //     .{
-    //         .start = .{ .point = 5 },
-    //         .end = .{ .point = 7 },
-    //         .spill_cost = 10,
-    //         .live_interval = &intervals[1],
-    //         .vreg = regalloc.VirtualReg{ .typ = types.I32, .index = 1 },
-    //         .uses = &.{.{ .point = 7 }},
-    //     },
-    //     .{
-    //         .start = .{ .point = 5 },
-    //         .end = .{ .point = 7 },
-    //         .spill_cost = 10,
-    //         .live_interval = &intervals[1],
-    //         .vreg = regalloc.VirtualReg{ .typ = types.I32, .index = 1 },
-    //         .uses = &.{.{ .point = 7 }},
-    //     },
-    // };
-
-    // const constraints = [_]regalloc.LocationConstraint{
-    //     .{ .fixed_reg = rdi },
-    //     .none,
-    // };
 
     const insts: []const Inst = &.{
         Inst{ .mov_mr = .{ .src = MemoryAddressing{
@@ -570,76 +538,39 @@ test "emit" {
 
     const Object = @import("Object.zig");
     var object = Object{
+        .context = undefined,
         .code_buffer = writer,
         .const_buffer = undefined,
         .symtab = undefined,
     };
-
-    // var ranges = std.ArrayList(*regalloc.LiveRange).init(arena.allocator());
-    //
-    // for (0..live_ranges.len) |i| {
-    //     try ranges.append(&live_ranges[i]);
-    //
-    //     var current_ranges = try arena.allocator().alloc(*regalloc.LiveRange, 1);
-    //     current_ranges[0] = &live_ranges[i];
-    //     intervals[i] = .{
-    //         .ranges = current_ranges,
-    //         .constraints = constraints[i],
-    //         .allocation = null,
-    //     };
-    // }
-
-    // var solution = try regalloc.runRegalloc(@import("BacktrackingAllocator.zig"), arena.allocator(), abi, ranges.items);
-    // defer solution.deinit(arena.allocator());
 
     var cfg = @import("../ControlFlowGraph.zig"){ .entry_ref = 0 };
     defer cfg.deinit(allocator);
     try cfg.nodes.put(allocator, 0, @import("../ControlFlowGraph.zig").CFGNode{ .preds = .{}, .succs = .{} });
     try cfg.computePostorder(allocator);
 
-    var liveness = @import("Liveness.zig").init(allocator);
-    defer liveness.deinit(allocator);
-    defer liveness.arena.deinit();
-    const lranges = try liveness.compute(allocator, &cfg, abi, &func);
-
-    var solution = try regalloc.runRegalloc(@import("BacktrackingAllocator.zig"), liveness.arena.allocator(), abi, lranges);
-    defer solution.deinit(liveness.arena.allocator());
+    const solution = try regalloc.runRegalloc(@import("BacktrackingAllocator.zig"), &arena, &cfg, abi, &func, target);
 
     var consumer = regalloc.SolutionConsumer.init(allocator, solution);
     defer consumer.deinit();
 
-    // var mapping = std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.Allocation).init(allocator);
-    // defer mapping.deinit();
-    //
-    // try mapping.put(regalloc.VirtualReg{ .typ = types.I32, .index = 0 }, .{ .preg = rax });
-    // try mapping.put(regalloc.VirtualReg{ .typ = types.I32, .index = 1 }, .{ .preg = rdi });
-
     try target.emit(allocator, &func, &consumer, abi, &object);
     std.debug.print("{s}\n", .{buffer.items});
 
-    // try Inst.emitPrologueText(&writer, 10, &.{rbx});
-    //
-    // for (insts) |*inst| {
-    //     try inst.emitText(&writer, &mapping);
-    // }
-    //
-    // // The entry function should not generate an epilogue
-    // try Inst.emitEpilogueText(&writer, 10, &.{rbx});
-
     // TODO: reconsider the epilogues (glibc or not glibc?) This is about the ABI thing / lowering whatever
 
-    // try std.testing.expectEqualStrings(
-    //     \\  push rbx
-    //     \\  mov rbp, rsp
-    //     \\  sub rsp, 10
-    //     \\  mov rax, [rsp + rbx * 8 + 3]
-    //     \\  mov rax, 60
-    //     \\  mov rdi, 32
-    //     \\  syscall
-    //     \\  add rsp, 10
-    //     \\  pop rbx
-    //     \\  mov rsp, rbp
-    //     \\  ret
-    //     \\
-    // , buffer.items);
+    try std.testing.expectEqualStrings(
+        \\  push rbx
+        \\  mov rbp, rsp
+        \\  sub rsp, 10
+        \\  mov rax, [rsp + rbx * 8 + 3]
+        \\  mov rax, 60
+        \\  mov rdi, 32
+        \\  syscall
+        \\  add rsp, 10
+        \\  pop rbx
+        \\  mov rsp, rbp
+        \\  ret
+        \\
+    , buffer.items);
 }

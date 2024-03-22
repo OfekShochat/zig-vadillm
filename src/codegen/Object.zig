@@ -30,6 +30,7 @@ const SymbolTable = struct {
     }
 };
 
+context: *anyopaque,
 symtab: SymbolTable,
 code_buffer: std.io.AnyWriter,
 const_buffer: std.io.AnyWriter,
