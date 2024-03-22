@@ -73,9 +73,7 @@ pub fn CFG(comptime L: type) type {
             while (true) {
                 if (iterator.next()) |block| {
                     block.deinit();
-                    std.log.warn("1", .{});
                 } else {
-                    std.log.err("Error while unwraping value", .{});
                     break;
                 }
             }
@@ -84,14 +82,12 @@ pub fn CFG(comptime L: type) type {
         }
 
         pub fn addNode(self: *@This(), node: Node, block: BasicBlock(L)) !void {
-            std.log.warn("add block", .{});
             try self.block_pool.putNoClobber(self.next_id, block);
             try self.tree.putNoClobber(self.next_id, node);
             self.next_id = self.next_id + 1;
         }
 
         pub fn addBlock(self: *@This(), block: BasicBlock(L)) !void {
-            std.log.warn("add block", .{});
             try self.block_pool.putNoClobber(self.next_id, block);
             self.next_id = self.next_id + 1;
         }
@@ -157,6 +153,7 @@ pub fn CfgBuilder(comptime L: type) type {
                             }
 
                             node = next.?.value_ptr.*;
+                            std.log.warn("next node: {}", .{node});
                             break;
                         },
 
@@ -198,10 +195,13 @@ pub fn CfgBuilder(comptime L: type) type {
                             //block is corrupted?
                         },
                     }
+
+                    std.log.warn("next block: {}", .{node});
                 }
             }
 
             // insert exit block
+            curr_block.deinit();
             curr_block = BasicBlock(L).init(self.allocator);
             try curr_block.addInstruction(unified_instruction);
             try self.cfg.addNode(Node{ .pred = &[1]u32{curr_block.block_id}, .succ = &[1]u32{exit_block.block_id} }, curr_block);
@@ -224,6 +224,7 @@ test "test gammanode parsing" {
     defer recexp.expr.deinit();
     var paths = [2]Id{ 2, 4 };
     var gamanode = rvsdg.Node{ .gama = rvsdg.GamaNode{ .cond = 2, .paths = paths[0..], .node_id = 1 } };
+    var gamaexit = rvsdg.Node{ .gamaExit = rvsdg.GamaExitNode{ .unified_flow_node = 5 } };
     //var paths_slice = paths.items[0..];
     std.log.info(" {} ", .{gamanode});
     for (gamanode.gama.paths) |i| {
@@ -232,7 +233,9 @@ test "test gammanode parsing" {
 
     try recexp.expr.put(1, gamanode);
     try recexp.expr.put(2, rvsdg.Node{ .simple = Instruction{ .add = BinOp{ .lhs = 12, .rhs = 12 } } });
-    try recexp.expr.put(4, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 10, .rhs = 2 } } });
+    try recexp.expr.put(3, gamaexit);
+    try recexp.expr.put(4, rvsdg.Node{ .simple = Instruction{ .add = BinOp{ .lhs = 10, .rhs = 10 } } });
+    try recexp.expr.put(5, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 10, .rhs = 2 } } });
     var builder = CfgBuilder(rvsdg.Node).init(recexp, std.testing.allocator);
     defer builder.deinit();
     std.log.warn("hello world", .{});
