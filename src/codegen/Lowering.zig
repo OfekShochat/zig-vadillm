@@ -73,7 +73,9 @@ pub fn CFG(comptime L: type) type {
             while (true) {
                 if (iterator.next()) |block| {
                     block.deinit();
+                    std.log.warn("1", .{});
                 } else {
+                    std.log.err("Error while unwraping value", .{});
                     break;
                 }
             }
@@ -82,12 +84,14 @@ pub fn CFG(comptime L: type) type {
         }
 
         pub fn addNode(self: *@This(), node: Node, block: BasicBlock(L)) !void {
+            std.log.warn("add block", .{});
             try self.block_pool.putNoClobber(self.next_id, block);
             try self.tree.putNoClobber(self.next_id, node);
             self.next_id = self.next_id + 1;
         }
 
         pub fn addBlock(self: *@This(), block: BasicBlock(L)) !void {
+            std.log.warn("add block", .{});
             try self.block_pool.putNoClobber(self.next_id, block);
             self.next_id = self.next_id + 1;
         }
