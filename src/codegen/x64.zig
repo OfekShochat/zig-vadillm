@@ -361,7 +361,7 @@ pub const Inst = union(enum) {
             .mov_rm,
             => {},
             .mov => |mov| {
-                try operands_out.append(regalloc.Operand.init(mov.src, .use, .stack, .early));
+                try operands_out.append(regalloc.Operand.init(mov.src, .use, .none, .early));
                 // hm, conditional constraints (mem->mem is disallowed)?
                 try operands_out.append(regalloc.Operand.init(mov.dst, .def, .none, .late));
             },
