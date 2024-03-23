@@ -82,6 +82,132 @@ pub fn getClobberedRegs(
     }
 }
 
+pub const SplitAtResult = struct {
+    ranges: []LiveRange,
+    split_range: *LiveRange,
+};
+
+pub fn splitAtLeaky(allocator: std.mem.Allocator, at: CodePoint, live_interval: *LiveInterval, spillcost_calc: *SpillCostCalc) !?SplitAtResult {
+    const found_idx = blk: {
+        for (live_interval.ranges, 0..) |range, i| {
+            if (range.start.isBeforeOrAt(at) and at.isBeforeOrAt(range.end)) {
+                break :blk i;
+            }
+        } else @panic("`at` has to intersect one of the ranges.");
+    };
+
+    const found_range = live_interval.ranges[found_idx];
+
+    if (found_range.isMinimal()) {
+        return null;
+    }
+
+    var split_intervals = try allocator.alloc(LiveInterval, 2);
+    var split_ranges = try allocator.alloc(LiveRange, 2);
+
+    const split_at = if (found_range.start.isSame(at)) blk: {
+        // The intersecting range starts before live_interval; split at the first use.
+        if (found_range.uses.len == 0 or found_range.uses[0].isSame(found_range.end) or found_range.uses[0].isSame(found_range.start)) {
+            break :blk found_range.start.getNextInst();
+        } else {
+            break :blk found_range.uses[0];
+        }
+    } else at;
+
+    var left_ranges = try allocator.alloc(*LiveRange, found_idx + 1);
+    var right_ranges = try allocator.alloc(*LiveRange, live_interval.ranges.len - found_idx);
+
+    @memcpy(left_ranges[0..found_idx], live_interval.ranges[0..found_idx]);
+    @memcpy(right_ranges[1..], live_interval.ranges[found_idx + 1 ..]);
+
+    if (found_range.uses.len == 0) {
+        split_ranges[0] = .{
+            .start = found_range.start,
+            .end = split_at.getPrevInst().getLate(),
+            .live_interval = &split_intervals[0],
+            .spill_cost = 0,
+            .uses = &.{},
+            .split_count = found_range.split_count + 1,
+            .vreg = found_range.vreg,
+        };
+
+        split_ranges[1] = .{
+            .start = split_at,
+            .end = found_range.end,
+            .live_interval = &split_intervals[1],
+            .spill_cost = 0,
+            .uses = &.{},
+            .split_count = found_range.split_count + 1,
+            .vreg = found_range.vreg,
+        };
+    } else {
+        var low: usize = 0;
+        var high: usize = found_range.uses.len - 1;
+
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (mid == 0) {
+                break;
+            } else if (found_range.uses[mid].isBefore(split_at)) {
+                low = mid + 1;
+            } else if (found_range.uses[mid].isAfter(split_at)) {
+                high = mid - 1;
+            } else {
+                // `split_at` shouldn't be exactly at a use. This means
+                return error.ContradictingConstraints;
+            }
+        }
+
+        const uses_split_idx = if (found_range.uses[low].isAfterOrAt(split_at)) low else low + 1;
+
+        split_ranges[0] = .{
+            .start = found_range.start,
+            .end = split_at.getJustBefore(),
+            .live_interval = &split_intervals[0],
+            .spill_cost = 0,
+            .uses = found_range.uses[0..uses_split_idx],
+            .split_count = found_range.split_count + 1,
+            .vreg = found_range.vreg,
+        };
+
+        split_ranges[1] = .{
+            .start = split_at,
+            .end = found_range.end,
+            .live_interval = &split_intervals[1],
+            .spill_cost = 0,
+            .uses = found_range.uses[uses_split_idx..],
+            .split_count = found_range.split_count + 1,
+            .vreg = found_range.vreg,
+        };
+    }
+
+    left_ranges[found_idx] = &split_ranges[0];
+    right_ranges[0] = &split_ranges[1];
+
+    split_intervals[0] = .{
+        .ranges = left_ranges,
+        .constraints = live_interval.constraints,
+        .allocation = null,
+    };
+
+    split_intervals[1] = .{
+        .ranges = right_ranges,
+        .constraints = live_interval.constraints,
+        .allocation = null,
+    };
+
+    allocator.free(live_interval.ranges);
+    allocator.destroy(live_interval);
+
+    _ = spillcost_calc;
+
+    // 2. Recalculate and normalize the spill costs.
+    split_ranges[0].spill_cost = found_range.spill_cost; //spillcost_calc.calcOne(split_ranges[0]);
+    split_ranges[1].spill_cost = found_range.spill_cost; //spillcost_calc.calcOne(split_ranges[1]);
+
+    return SplitAtResult{ .ranges = split_ranges, .split_range = found_range };
+}
+
 pub const VirtualReg = struct {
     index: u32,
     typ: types.Type,
@@ -289,14 +415,14 @@ pub const SolutionConsumer = struct {
     fn advanceStitches(self: *SolutionConsumer) []const Stitch {
         if (self.stitches.len == 0) return &.{};
 
-        if (self.stitches[0].codepoint.isSame(self.current)) {
-            return &.{};
-        }
+        // if (self.stitches[0].codepoint.isAfter(self.current)) {
+        //     return &.{};
+        // }
 
         var end: usize = 0;
         for (self.stitches) |stitch| {
-            end += 1;
             if (!stitch.codepoint.isSame(self.current)) break;
+            end += 1;
         }
 
         defer self.stitches = self.stitches[end..];
@@ -351,18 +477,20 @@ fn discoverStitches(allocator: std.mem.Allocator, allocated_ranges: []LiveRange)
     // Also note that splits within instructions are discarded in emission.
 
     for (intervals.keys()) |interval| {
-        const range = interval.ranges[0];
-        if (last_used.get(range.vreg)) |last_range| {
+        const representative_range = interval.ranges[0];
+
+        if (last_used.get(representative_range.vreg)) |last_range| {
             if (std.meta.eql(interval.allocation.?, last_range.live_interval.allocation.?)) continue;
 
             try stitches.append(Stitch{
                 .codepoint = last_range.end.getNextInst(),
                 .from = last_range.live_interval.allocation.?,
                 .to = interval.allocation.?,
+                .vreg = representative_range.vreg,
             });
         }
 
-        try last_used.put(range.vreg, range);
+        try last_used.put(representative_range.vreg, representative_range);
     }
 
     return stitches.toOwnedSlice();
@@ -385,6 +513,9 @@ fn assignStackSlots(
     var active = std.ArrayList(LiveRange).init(allocator);
     defer active.deinit();
 
+    var active_stitch_mapping = std.AutoHashMap(VirtualReg, usize).init(allocator);
+    defer active_stitch_mapping.deinit();
+
     var iter = func.blockIter();
     while (iter.next()) |block| {
         var current = block.start;
@@ -396,6 +527,8 @@ fn assignStackSlots(
                 if (stitches[idx].to == .stack) {
                     // TODO: should this always be `word_size`?
                     stitches[idx].to = .{ .stack = @intCast(delta) };
+                    try active_stitch_mapping.put(stitches[idx].vreg, @intCast(delta));
+
                     delta += @intCast(target.word_size);
                 }
             }
@@ -417,8 +550,12 @@ fn assignStackSlots(
                 }
 
                 if (range.preg() == null) {
-                    range.live_interval.allocation = .{ .stack = @intCast(delta) };
-                    delta += @intCast(target.word_size);
+                    if (active_stitch_mapping.get(range.vreg)) |use_delta| {
+                        range.live_interval.allocation = .{ .stack = use_delta };
+                    } else {
+                        range.live_interval.allocation = .{ .stack = @intCast(delta) };
+                        delta += @intCast(target.word_size);
+                    }
                 }
             }
 
@@ -625,6 +762,7 @@ pub const Stitch = struct {
     codepoint: CodePoint,
     from: Allocation,
     to: Allocation,
+    vreg: VirtualReg,
 };
 
 pub const LiveRange = struct {

@@ -210,11 +210,11 @@ fn getPregFromEncoding(preg: regalloc.PhysicalReg, size: regalloc.RegisterSize) 
 }
 
 pub fn emitMov(buffer: *std.io.AnyWriter, from: regalloc.Allocation, to: regalloc.Allocation) !void {
-    try buffer.print("mov {}, {}", .{ fmtAllocation(to), fmtAllocation(from) });
+    try buffer.print("  mov {}, {}\n", .{ fmtAllocation(to), fmtAllocation(from) });
 }
 
 pub fn emitStackReserve(buffer: *std.io.AnyWriter, size: usize) !void {
-    try buffer.print("sub rsp, {}", .{size});
+    try buffer.print("  sub rsp, {}\n", .{size});
 }
 
 pub fn formatAllocation(

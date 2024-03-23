@@ -142,6 +142,8 @@ const LiveRangeBuilder = struct {
     constraint: regalloc.LocationConstraint,
 };
 
+const LiveRangeId = struct { index: u32, constraint: regalloc.LocationConstraint };
+
 fn computeLiveRanges(
     self: *Liveness,
     abi: Abi,
@@ -168,18 +170,49 @@ fn computeLiveRanges(
             try inst.getAllocatableOperands(abi, &operands_temp);
 
             for (operands_temp.items) |operand| {
+                const constraint = operand.locationConstraints();
+
                 const entry = try ranges_in_flight.getOrPutValue(
                     operand.vregIndex(),
                     LiveRangeBuilder{
                         .uses = std.ArrayList(CodePoint).init(self.allocator),
                         .vreg = operand.vreg(),
-                        .constraint = operand.locationConstraints(),
+                        .constraint = constraint,
+                        .start = block.start,
+                        .end = if (operand.operandUse() == .early) current else current.getLate(),
                     },
                 );
 
-                if (!entry.found_existing) {
-                    entry.value_ptr.end = current;
-                    entry.value_ptr.start = block.start;
+                if (!std.meta.eql(constraint, entry.value_ptr.constraint)) {
+                    const builder = entry.value_ptr;
+                    const ranges = try self.allocator.alloc(*regalloc.LiveRange, 1);
+                    const interval = try self.allocator.create(regalloc.LiveInterval);
+                    interval.* = .{
+                        .allocation = null,
+                        .ranges = ranges,
+                        .constraints = builder.constraint,
+                    };
+
+                    const range = try self.allocator.create(regalloc.LiveRange);
+                    range.* = regalloc.LiveRange{
+                        .vreg = builder.vreg,
+                        .start = current.getNextInst(),
+                        .end = builder.end,
+                        .uses = try builder.uses.toOwnedSlice(),
+                        .live_interval = interval,
+                    };
+
+                    ranges[0] = range;
+
+                    try live_ranges.append(range);
+
+                    entry.value_ptr.* = LiveRangeBuilder{
+                        .uses = std.ArrayList(CodePoint).init(self.allocator),
+                        .vreg = operand.vreg(),
+                        .constraint = constraint,
+                        .start = block.start,
+                        .end = current.getLate(),
+                    };
                 }
 
                 if (operand.accessType() == .use) {
@@ -201,6 +234,7 @@ fn computeLiveRanges(
         }
 
         for (ranges_in_flight.values()) |*builder| {
+            // put this into a function
             const ranges = try self.allocator.alloc(*regalloc.LiveRange, 1);
             const interval = try self.allocator.create(regalloc.LiveInterval);
             interval.* = .{
@@ -223,6 +257,8 @@ fn computeLiveRanges(
             try live_ranges.append(range);
         }
     }
+
+    std.debug.print("{any}\n", .{live_ranges.items});
 
     return live_ranges.toOwnedSlice();
     // TODO: coalescing pass for phi stuff: forward, if you find a copy to a vreg from a vreg (should this be marked as a phi thing?), log it and try to find the blocks that use it. If it finds the live range, coalesce it into the same interval.

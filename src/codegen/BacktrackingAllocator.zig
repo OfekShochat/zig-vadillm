@@ -314,142 +314,20 @@ fn trySplitAndRequeue(self: *Self, live_range: *regalloc.LiveRange, interference
     std.debug.assert(!std.meta.eql(first_point_of_intersection, CodePoint.invalidMax()));
     std.debug.assert(live_range.start.isBeforeOrAt(first_point_of_intersection) and live_range.end.isAfterOrAt(first_point_of_intersection));
 
-    const split_ranges = try self.splitAt(first_point_of_intersection, live_range.live_interval, spillcost_calc);
+    const split_result = try regalloc.splitAtLeaky(self.allocator, first_point_of_intersection, live_range.live_interval, spillcost_calc);
 
-    if (split_ranges == null) {
+    if (split_result == null) {
         return false;
     }
 
-    for (split_ranges.?) |*range| {
+    var live_union = self.live_unions.getPtrAssertContains(live_range.vreg.class());
+    live_union.delete(split_result.?.split_range) catch {}; // error.NoSuchKey might be expected here.
+
+    for (split_result.?.ranges) |*range| {
         try self.queue.add(range);
     }
 
     return true;
-}
-
-fn splitAt(self: *Self, at: CodePoint, live_interval: *regalloc.LiveInterval, spillcost_calc: *SpillCostCalc) !?[]regalloc.LiveRange {
-    var found_idx: usize = undefined;
-
-    for (live_interval.ranges, 0..) |range, i| {
-        if (range.start.isBeforeOrAt(at) and at.isBeforeOrAt(range.end)) {
-            found_idx = i;
-            break;
-        }
-    } else @panic("`at` has to intersect one of the ranges.");
-
-    const found_range = live_interval.ranges[found_idx];
-
-    if (found_range.isMinimal()) {
-        return null;
-    }
-
-    var split_intervals = try self.allocator.alloc(regalloc.LiveInterval, 2);
-    var split_ranges = try self.allocator.alloc(regalloc.LiveRange, 2);
-
-    const split_at = if (found_range.start.isSame(at)) blk: {
-        // The intersecting range starts before live_interval; split at the first use.
-        if (found_range.uses.len == 0 or found_range.uses[0].isSame(found_range.end) or found_range.uses[0].isSame(found_range.start)) {
-            break :blk found_range.start.getNextInst();
-        } else {
-            break :blk found_range.uses[0];
-        }
-    } else at;
-
-    var left_ranges = try self.allocator.alloc(*regalloc.LiveRange, found_idx + 1);
-    var right_ranges = try self.allocator.alloc(*regalloc.LiveRange, live_interval.ranges.len - found_idx);
-
-    @memcpy(left_ranges[0..found_idx], live_interval.ranges[0..found_idx]);
-    @memcpy(right_ranges[1..], live_interval.ranges[found_idx + 1 ..]);
-
-    if (found_range.uses.len == 0) {
-        split_ranges[0] = .{
-            .start = found_range.start,
-            .end = split_at.getPrevInst().getLate(),
-            .live_interval = &split_intervals[0],
-            .spill_cost = 0,
-            .uses = &.{},
-            .split_count = found_range.split_count + 1,
-            .vreg = found_range.vreg,
-        };
-
-        split_ranges[1] = .{
-            .start = split_at,
-            .end = found_range.end,
-            .live_interval = &split_intervals[1],
-            .spill_cost = 0,
-            .uses = &.{},
-            .split_count = found_range.split_count + 1,
-            .vreg = found_range.vreg,
-        };
-    } else {
-        var low: usize = 0;
-        var high: usize = found_range.uses.len - 1;
-
-        while (low < high) {
-            const mid = low + (high - low) / 2;
-            if (mid == 0) {
-                break;
-            } else if (found_range.uses[mid].isBefore(split_at)) {
-                low = mid + 1;
-            } else if (found_range.uses[mid].isAfter(split_at)) {
-                high = mid - 1;
-            } else {
-                // `split_at` shouldn't be exactly at a use. This means
-                return error.ContradictingConstraints;
-            }
-        }
-
-        const uses_split_idx = if (found_range.uses[low].isAfterOrAt(split_at)) low else low + 1;
-
-        split_ranges[0] = .{
-            .start = found_range.start,
-            .end = split_at.getJustBefore(),
-            .live_interval = &split_intervals[0],
-            .spill_cost = 0,
-            .uses = found_range.uses[0..uses_split_idx],
-            .split_count = found_range.split_count + 1,
-            .vreg = found_range.vreg,
-        };
-
-        split_ranges[1] = .{
-            .start = split_at,
-            .end = found_range.end,
-            .live_interval = &split_intervals[1],
-            .spill_cost = 0,
-            .uses = found_range.uses[uses_split_idx..],
-            .split_count = found_range.split_count + 1,
-            .vreg = found_range.vreg,
-        };
-    }
-
-    left_ranges[found_idx] = &split_ranges[0];
-    right_ranges[0] = &split_ranges[1];
-
-    split_intervals[0] = .{
-        .ranges = left_ranges,
-        .constraints = live_interval.constraints,
-        .allocation = null,
-    };
-
-    split_intervals[1] = .{
-        .ranges = right_ranges,
-        .constraints = live_interval.constraints,
-        .allocation = null,
-    };
-
-    var live_union = self.live_unions.getPtrAssertContains(live_interval.ranges[0].vreg.class());
-    live_union.delete(found_range) catch {}; // error.NoSuchKey might be expected here.
-
-    self.allocator.free(live_interval.ranges);
-    self.allocator.destroy(live_interval);
-
-    _ = spillcost_calc;
-
-    // 2. Recalculate and normalize the spill costs.
-    split_ranges[0].spill_cost = found_range.spill_cost; //spillcost_calc.calcOne(split_ranges[0]);
-    split_ranges[1].spill_cost = found_range.spill_cost; //spillcost_calc.calcOne(split_ranges[1]);
-
-    return split_ranges;
 }
 
 test "regalloc.simple allocations" {
