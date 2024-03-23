@@ -179,7 +179,6 @@ pub fn CfgBuilder(comptime L: type) type {
                             std.log.warn("gamanode: {}", .{node.gama});
                             try self.cfg.addBlock(curr_block);
                             try self.parseGammaNode(node.gama);
-                            break;
                         },
 
                         rvsdg.Node.theta => {},
@@ -198,6 +197,8 @@ pub fn CfgBuilder(comptime L: type) type {
 
                     std.log.warn("next block: {}", .{node});
                 }
+
+                std.log.warn("last node: ", .{});
             }
 
             // insert exit block
@@ -222,7 +223,7 @@ test "test gammanode parsing" {
     var recexp = comptime RecExpr(rvsdg.Node){ .expr = std.AutoArrayHashMap(u32, rvsdg.Node).init(std.testing.allocator) };
     //var egraph = egg.EGraph(rvsdg.Node, rvsdg.Node).init(std.testing.allocator);
     defer recexp.expr.deinit();
-    var paths = [2]Id{ 2, 4 };
+    var paths = [2]Id{ 2, 5 };
     var gamanode = rvsdg.Node{ .gama = rvsdg.GamaNode{ .cond = 2, .paths = paths[0..], .node_id = 1 } };
     var gamaexit = rvsdg.Node{ .gamaExit = rvsdg.GamaExitNode{ .unified_flow_node = 5 } };
     //var paths_slice = paths.items[0..];
@@ -233,9 +234,10 @@ test "test gammanode parsing" {
 
     try recexp.expr.put(1, gamanode);
     try recexp.expr.put(2, rvsdg.Node{ .simple = Instruction{ .add = BinOp{ .lhs = 12, .rhs = 12 } } });
-    try recexp.expr.put(3, gamaexit);
-    try recexp.expr.put(4, rvsdg.Node{ .simple = Instruction{ .add = BinOp{ .lhs = 10, .rhs = 10 } } });
-    try recexp.expr.put(5, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 10, .rhs = 2 } } });
+    try recexp.expr.put(3, rvsdg.Node{ .simple = Instruction{ .mul = BinOp{ .lhs = 20, .rhs = 12 } } });
+    try recexp.expr.put(4, gamaexit);
+    try recexp.expr.put(5, rvsdg.Node{ .simple = Instruction{ .add = BinOp{ .lhs = 10, .rhs = 10 } } });
+    try recexp.expr.put(6, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 10, .rhs = 2 } } });
     var builder = CfgBuilder(rvsdg.Node).init(recexp, std.testing.allocator);
     defer builder.deinit();
     std.log.warn("hello world", .{});
