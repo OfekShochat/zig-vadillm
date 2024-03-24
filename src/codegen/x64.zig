@@ -250,8 +250,6 @@ pub const Inst = union(enum) {
     mov_rr: struct { size: regalloc.RegisterSize, src: regalloc.PhysicalReg, dst: regalloc.PhysicalReg },
     mov_mr: struct { size: regalloc.RegisterSize, src: MemoryAddressing, dst: regalloc.PhysicalReg },
     mov_rm: struct { size: regalloc.RegisterSize, src: regalloc.PhysicalReg, dst: MemoryAddressing },
-    // mov_imm32: struct { size: regalloc.RegisterSize, imm32: u32, dst: regalloc.PhysicalReg },
-    // mov_imm32v: struct { imm32: u32, dst: regalloc.VirtualReg },
     mov_iv: struct { imm: u64, dst: regalloc.VirtualReg },
     mov_vr: struct { size: regalloc.RegisterSize, src: regalloc.VirtualReg, dst: regalloc.PhysicalReg },
     mov: struct { size: regalloc.RegisterSize, src: regalloc.VirtualReg, dst: regalloc.VirtualReg },
@@ -261,8 +259,7 @@ pub const Inst = union(enum) {
         rhs: regalloc.VirtualReg,
         dst: regalloc.VirtualReg,
     },
-    // TODO: have values here
-    ret: void,
+    ret: []const regalloc.VirtualReg,
     syscall: []const regalloc.VirtualReg,
     push: struct { size: regalloc.RegisterSize, src: regalloc.VirtualReg },
     pop: struct { size: regalloc.RegisterSize, dst: regalloc.VirtualReg },
@@ -295,6 +292,7 @@ pub const Inst = union(enum) {
                 mov_rm.dst,
                 getPregFromEncoding(mov_rm.src, mov_rm.size).?,
             }),
+            // TODO: how do I model reg->mem movs that are into an address pointed by a vreg?
             .mov => |mov| try buffer.print("  mov {}, {}\n", .{
                 fmtAllocation(mapping.get(mov.dst).?),
                 fmtAllocation(mapping.get(mov.src).?),
@@ -319,36 +317,7 @@ pub const Inst = union(enum) {
                 getPregFromEncoding(mapping.get(pop.dst).?.preg, pop.size).?,
             }),
             .push_imm32 => |imm32| try buffer.print("  push {}\n", .{imm32}),
-            .syscall => {
-                // if (abi.call_conv.params.len > 0) {
-                //     try (Inst{ .mov_imm32 = .{
-                //         .imm32 = syscall.id,
-                //         .dst = abi.call_conv.params[0],
-                //         .size = word_size,
-                //     } }).emitText(buffer, abi, mapping);
-                // } else {
-                //     try (Inst{ .push_imm32 = syscall.id }).emitText(buffer, abi, mapping);
-                // }
-                //
-                // var handled: usize = 0;
-                //
-                // while (handled + 1 < abi.call_conv.params.len) : (handled += 1) {
-                //     try (Inst{ .mov_vr = .{
-                //         .src = syscall.values[handled],
-                //         .dst = abi.call_conv.params[handled + 1],
-                //         .size = word_size,
-                //     } }).emitText(buffer, abi, mapping);
-                // }
-                //
-                // for (syscall.values[handled..]) |value| {
-                //     try (Inst{ .push = .{
-                //         .src = value,
-                //         .size = value.typ.containingRegisterSize(),
-                //     } }).emitText(buffer, abi, mapping);
-                // }
-
-                try buffer.writeAll("  syscall\n");
-            },
+            .syscall => try buffer.writeAll("  syscall\n"),
         }
     }
 
@@ -385,6 +354,7 @@ pub const Inst = union(enum) {
                     try operands_out.append(regalloc.Operand.init(values[idx], .use, constraint, .early));
                 }
             },
+            // .ret => |values| ,
             else => {},
         }
     }
@@ -477,10 +447,6 @@ test "emit" {
     var gwriter = buffer.writer();
     const writer = gwriter.any();
 
-    // TODO: have preferred and not-preferred regs within the allocator (callee-saved regs for example)
-    // if a reg is used from the non-preferred regs, it is moved to the preferred regs. see, callee-saved
-    // regs.
-
     const abi = systemv_abi;
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -506,6 +472,7 @@ test "emit" {
             .dst = regalloc.VirtualReg{ .typ = types.I32, .index = 2 },
             .size = .@"8",
         } },
+        Inst{ .ret = &.{regalloc.VirtualReg{ .typ = types.I32, .index = 0 }} },
     };
 
     var mach_insts = try allocator.alloc(MachineInst, insts.len);

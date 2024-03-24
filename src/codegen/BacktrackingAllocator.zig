@@ -1,3 +1,8 @@
+//! A backtracking register allocator.
+//! It uses a priority queue to first visit higher spill-cost ranges
+//!
+//! Note that late-uses are not supported, as splitting would be more complex with them.
+
 const std = @import("std");
 const regalloc = @import("regalloc.zig");
 const types = @import("../types.zig");
@@ -113,6 +118,7 @@ pub fn run(self: *Self, live_ranges: []const *regalloc.LiveRange, spillcost_calc
         try self.runOne(live_range, spillcost_calc);
     }
 
+    // is there a better way of doing this?
     self.second_chance_mode = true;
 
     while (self.second_chance.removeOrNull()) |live_range| {
@@ -289,7 +295,7 @@ fn tryEvict(
         }
     }
 
-    // We only evict spill costs less than ours, so that we are guaranteed a solution.
+    // We only evict spill costs less than ours.
     if (live_range.spill_cost < min_cost) {
         return null;
     }
