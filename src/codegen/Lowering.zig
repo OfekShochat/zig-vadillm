@@ -23,10 +23,10 @@ pub fn BasicBlock(comptime L: type) type {
         instructions: std.ArrayList(L),
         block_id: u32,
 
-        pub fn init(allocator: std.mem.Allocator) @This() {
+        pub fn init(allocator: std.mem.Allocator, block_id: u32) @This() {
             return @This(){
                 .instructions = std.ArrayList(L).init(allocator),
-                .block_id = 0,
+                .block_id = block_id,
             };
         }
 
@@ -66,16 +66,27 @@ pub fn CFG(comptime L: type) type {
             };
         }
 
+        pub fn printTree(self: @This()) void {
+            var tree_iterator = self.block_pool.iterator();
+            while (true) {
+                if (tree_iterator.next()) |node| {
+                    std.debug.print("node: {}\n", .{node.value_ptr.*});
+                    //std.debug.print("pred: {}", .{node.value_ptr.*.pred[0]});
+                    //std.debug.print("succ: {}", .{node.value_ptr.*.succ[0]});
+                } else {
+                    return;
+                }
+            }
+        }
+
         pub fn deinit(self: *@This()) void {
             self.tree.deinit();
 
             var iterator = self.block_pool.valueIterator();
             while (true) {
-                if (iterator.next()) |block| {
-                    block.deinit();
-                } else {
-                    break;
-                }
+                var block = iterator.next() orelse break;
+                std.debug.print("free block number {}\n", .{block.block_id});
+                block.deinit();
             }
 
             self.block_pool.deinit();
@@ -113,30 +124,28 @@ pub fn CfgBuilder(comptime L: type) type {
 
         fn sliceIteratorByKey(iterator: *std.AutoArrayHashMap(u32, L).Iterator, key: u32) void {
             while (true) {
-                const next = iterator.next().?;
-                std.log.warn("next in iterator: key {}, desired key {}", .{ next.key_ptr.*, key });
-
-                if (next.key_ptr.* == key) {
-                    return;
+                if (iterator.next()) |next| {
+                    if (next.key_ptr.* == key) {
+                        return;
+                    }
                 }
             }
         }
 
         pub fn parseGammaNode(self: *@This(), start_node: rvsdg.GamaNode) !void {
             // insert entry block
-            std.log.warn("hello world", .{});
-            const exit_block = BasicBlock(L).init(self.allocator);
+            const exit_block = BasicBlock(L).init(self.allocator, 0);
             //exit_block.append(rvsdg.OptBarrier);
-            var unified_instruction: L = self.recExp.expr.get(start_node.paths[0]).?;
-            var curr_block = BasicBlock(L).init(self.allocator);
-            var keep_iterating = true;
+            //var unified_instruction: L = self.recExp.expr.get(start_node.paths[0]).?;
+            var curr_block_idx: u32 = 0;
+            var curr_block = BasicBlock(L).init(self.allocator, curr_block_idx);
             for (start_node.paths) |path| {
                 var node: rvsdg.Node = self.recExp.expr.get(path).?;
-                std.log.warn("path: {}", .{path});
-                while (keep_iterating) {
+                curr_block_idx = path;
+                std.debug.print("path: {}\n", .{path});
+                while (true) {
                     switch (node) {
                         rvsdg.Node.simple => {
-                            std.log.warn("simple node: {}", .{node.simple});
                             // non-terminating instruction, add to block
                             //curr_block.addInstruction(
                             //    node,
@@ -145,21 +154,21 @@ pub fn CfgBuilder(comptime L: type) type {
                             //std.log.info("simple node: {}", .{node});
                             try curr_block.addInstruction(node);
                             var iterator = self.recExp.expr.iterator();
-                            sliceIteratorByKey(&iterator, path);
+                            sliceIteratorByKey(&iterator, curr_block_idx);
                             var next = iterator.next();
                             if (next == null) {
-                                keep_iterating = false;
+                                try self.cfg.addBlock(curr_block);
+                                curr_block_idx += 1;
+                                curr_block = BasicBlock(L).init(self.allocator, curr_block_idx);
                                 break;
                             }
 
                             node = next.?.value_ptr.*;
-                            std.log.warn("next node: {}", .{node});
-                            break;
+                            curr_block_idx += 1;
                         },
 
                         rvsdg.Node.gamaExit => {
-                            std.log.info("gamaExit: {}", .{node});
-                            keep_iterating = false;
+                            //keep_iterating = false;
                             // end of if statement
                             //const edge = Node{ .pred = [_]u32{curr_block.ptr}[0..], .succ = [_]u32{exit_block.ptr}[0..] };
                             const edge = Node{ .pred = &([1]u32{
@@ -168,15 +177,20 @@ pub fn CfgBuilder(comptime L: type) type {
                                 exit_block.block_id,
                             }) };
                             try self.cfg.addNode(edge, curr_block);
+                            curr_block_idx += 1;
+                            curr_block = BasicBlock(L).init(self.allocator, curr_block_idx);
                             //const cfg_node = Node{ .pred = [_]u32{curr_block.ptr}, .succ = [_]u32{exit_block.ptr} };
                             //self.cfg.addNode(cfg_node);
-                            unified_instruction = self.recExp.expr.get(node.gamaExit.unified_flow_node).?; //TODO: we wont get an egraph at this points, but a RecExpr, therefore we need to create a function that searches for specific ID inside the recexpr.
-                            self.curr_block_id += 1;
-                            break;
+                            //unified_instruction = self.recExp.expr.get(node.gamaExit.unified_flow_node).?; //TODO: we wont get an egraph at this points, but a RecExpr, therefore we need to create a function that searches for specific ID inside the recexpr.
+                            self.curr_block_id = node.gamaExit.unified_flow_node;
+                            if (self.recExp.expr.get(self.curr_block_id)) |next_node| {
+                                node = next_node;
+                            } else {
+                                break;
+                            }
                         },
 
                         rvsdg.Node.gama => {
-                            std.log.warn("gamanode: {}", .{node.gama});
                             try self.cfg.addBlock(curr_block);
                             try self.parseGammaNode(node.gama);
                         },
@@ -190,22 +204,16 @@ pub fn CfgBuilder(comptime L: type) type {
                         rvsdg.Node.omega => {},
 
                         else => {
-                            std.log.warn("block is corrupted?", .{});
                             //block is corrupted?
                         },
                     }
-
-                    std.log.warn("next block: {}", .{node});
                 }
-
-                std.log.warn("last node: ", .{});
             }
 
             // insert exit block
-            curr_block.deinit();
-            curr_block = BasicBlock(L).init(self.allocator);
-            try curr_block.addInstruction(unified_instruction);
-            try self.cfg.addNode(Node{ .pred = &[1]u32{curr_block.block_id}, .succ = &[1]u32{exit_block.block_id} }, curr_block);
+            //curr_block = BasicBlock(L).init(self.allocator, 0);
+            //try curr_block.addInstruction(unified_instruction);
+            //try self.cfg.addNode(Node{ .pred = &[1]u32{curr_block.block_id}, .succ = &[1]u32{exit_block.block_id} }, curr_block);
         }
 
         pub fn parseThetaNode() void {}
@@ -219,13 +227,14 @@ pub fn CfgBuilder(comptime L: type) type {
 }
 
 test "test gammanode parsing" {
-    std.log.warn("start test", .{});
-    var recexp = comptime RecExpr(rvsdg.Node){ .expr = std.AutoArrayHashMap(u32, rvsdg.Node).init(std.testing.allocator) };
-    //var egraph = egg.EGraph(rvsdg.Node, rvsdg.Node).init(std.testing.allocator);
+    std.debug.print("start test", .{});
+    //var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var recexp = RecExpr(rvsdg.Node){ .expr = std.AutoArrayHashMap(u32, rvsdg.Node).init(std.testing.allocator) };
+    //var egraph = egg.EGraph(rvsdg.Node, rvsdg.Node).init(std.aren
     defer recexp.expr.deinit();
     var paths = [2]Id{ 2, 5 };
     var gamanode = rvsdg.Node{ .gama = rvsdg.GamaNode{ .cond = 2, .paths = paths[0..], .node_id = 1 } };
-    var gamaexit = rvsdg.Node{ .gamaExit = rvsdg.GamaExitNode{ .unified_flow_node = 5 } };
+    var gamaexit = rvsdg.Node{ .gamaExit = rvsdg.GamaExitNode{ .unified_flow_node = 8 } };
     //var paths_slice = paths.items[0..];
     std.log.info(" {} ", .{gamanode});
     for (gamanode.gama.paths) |i| {
@@ -238,10 +247,16 @@ test "test gammanode parsing" {
     try recexp.expr.put(4, gamaexit);
     try recexp.expr.put(5, rvsdg.Node{ .simple = Instruction{ .add = BinOp{ .lhs = 10, .rhs = 10 } } });
     try recexp.expr.put(6, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 10, .rhs = 2 } } });
+    try recexp.expr.put(7, gamaexit);
+    try recexp.expr.put(8, rvsdg.Node{ .simple = Instruction{ .shr = BinOp{ .lhs = 15, .rhs = 39 } } });
     var builder = CfgBuilder(rvsdg.Node).init(recexp, std.testing.allocator);
-    defer builder.deinit();
+    //defer builder.deinit();
     std.log.warn("hello world", .{});
     try builder.parseGammaNode(gamanode.gama);
+    builder.cfg.printTree();
+    builder.deinit();
+    //std.debug.print("------------------------------------------------------------------------------------", .{});
+    //builder.cfg.printTree();
     //builder.parseGammaNode(recexp.expr.get(1));
     // 1.create rec expression
     // 2. call function
