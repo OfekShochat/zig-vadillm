@@ -28,6 +28,7 @@ pub const GamaNode = struct {
     node_id: Id,
     cond: Id,
     paths: []Id,
+    unified_flow_node: Id,
 };
 
 // We need some way to denote that we reached the end of the diveres control flow region
@@ -60,6 +61,7 @@ pub const ThetaNode = struct {
     node_id: Id,
     tail_cond: Id,
     loop_body: Id,
+    exit_node: Id,
 };
 
 // inter procedural
@@ -76,6 +78,10 @@ pub const LambdaNode = struct {
     arguments: []Id,
     output: Id,
     function_body: Id,
+};
+
+pub const ThetaExitNode = struct {
+    node_id: Id,
 };
 
 pub const DeltaNode = struct {
@@ -122,4 +128,5 @@ pub const Node = union(enum) {
     phi: PhiNode,
     omega: OmegaNode,
     gamaExit: GamaExitNode,
+    thetaExit: ThetaExitNode,
 };
