@@ -79,6 +79,7 @@ pub fn CFG(comptime L: type) type {
                 std.debug.print("No edges, only one block: {}\n", .{next.key_ptr.*});
             }
             var tree_iterator = self.edge_pool.iterator();
+            std.debug.print("number of nodes: {}\n", .{self.block_pool.count()});
             while (true) {
                 if (tree_iterator.next()) |node| {
                     std.debug.print("node: {}\n", .{node.key_ptr.*});
@@ -126,6 +127,8 @@ pub fn CFG(comptime L: type) type {
         pub fn addEdge(self: *@This(), from: BlockId, to: BlockId) !void {
             var from_node = try self.edge_pool.getOrPutValue(from, Node{});
             var to_node = try self.edge_pool.getOrPutValue(to, Node{});
+            std.debug.print("from node: {}\n", .{from_node.value_ptr.*});
+            std.debug.print("to node: {}\n", .{to_node.value_ptr.*});
             try from_node.value_ptr.succ.put(self.allocator, to);
             try to_node.value_ptr.pred.put(self.allocator, from);
         }
@@ -169,6 +172,53 @@ pub fn CfgBuilder(comptime L: type) type {
             try self.cfg.addEdge(self.curr_block_id - 1, self.curr_block_id);
             var curr_block = BasicBlock(L).init(self.allocator, self.curr_block_id);
             var unified_block_idx: ?u32 = null;
+            var cond_block_id: u32 = 0;
+
+            var curr_node = self.recExp.expr.get(start_node.cond).?;
+            curr_node_idx = start_node.cond;
+            while (true) {
+                switch (curr_node) {
+                    rvsdg.Node.simple => {
+                        try curr_block.addInstruction(curr_node);
+                        var iterator = self.recExp.expr.iterator();
+                        sliceIteratorByKey(&iterator, curr_node_idx);
+                        var next = iterator.next();
+                        if (next == null) {
+                            try self.cfg.addBlock(curr_block);
+                            self.curr_block_id += 1;
+                            curr_block = BasicBlock(L).init(self.allocator, self.curr_block_id);
+                            break;
+                        }
+
+                        curr_node = next.?.value_ptr.*;
+                        curr_node_idx += 1;
+                    },
+
+                    rvsdg.Node.gamaExit => {
+                        //self.curr_block_id += 1;
+                        try self.cfg.addBlock(curr_block);
+                        cond_block_id = self.curr_block_id;
+                        self.curr_block_id += 1;
+                        curr_block = BasicBlock(L).init(self.allocator, self.curr_block_id);
+                        break;
+                    },
+
+                    rvsdg.Node.gama => {},
+
+                    rvsdg.Node.phi => {},
+
+                    rvsdg.Node.theta => {},
+
+                    rvsdg.Node.thetaExit => {},
+
+                    rvsdg.Node.lambda => {},
+
+                    rvsdg.Node.omega => {},
+
+                    rvsdg.Node.delta => {},
+                }
+            }
+
             for (start_node.paths) |path| {
                 var node: rvsdg.Node = self.recExp.expr.get(path).?;
                 curr_node_idx = path;
@@ -183,6 +233,7 @@ pub fn CfgBuilder(comptime L: type) type {
                             var next = iterator.next();
                             if (next == null) {
                                 try self.cfg.addBlock(curr_block);
+                                cond_block_id = self.curr_block_id;
                                 self.curr_block_id += 1;
                                 curr_block = BasicBlock(L).init(self.allocator, self.curr_block_id);
                                 break;
@@ -206,6 +257,7 @@ pub fn CfgBuilder(comptime L: type) type {
                             }
                             //std.debug.print("[+] create edge from {} to {}\n", .{ curr_block.block_id, unified_block_idx.? });
                             try self.cfg.addEdge(curr_block.block_id, unified_block_idx.?);
+                            try self.cfg.addEdge(cond_block_id, curr_block.block_id);
                             curr_block = BasicBlock(L).init(self.allocator, self.curr_block_id);
                             if (self.recExp.expr.get(self.curr_block_id)) |next_node| {
                                 node = next_node;
@@ -268,6 +320,7 @@ pub fn CfgBuilder(comptime L: type) type {
 
                     rvsdg.Node.thetaExit => {
                         try self.cfg.addBlock(loop_body_block);
+                        self.curr_block_id += 1;
                         break;
                     },
 
@@ -336,7 +389,7 @@ pub fn CfgBuilder(comptime L: type) type {
             try self.cfg.addEdge(loop_body_block.block_id, loop_condition_block.block_id);
             try self.cfg.addEdge(loop_condition_block.block_id, loop_body_block.block_id);
             try self.cfg.addEdge(loop_condition_block.block_id, exit_block.block_id);
-            return;
+            //return;
         }
 
         pub fn parseLambdaNode() void {}
@@ -352,6 +405,7 @@ pub fn CfgBuilder(comptime L: type) type {
             while (true) {
                 switch (curr_node) {
                     rvsdg.Node.simple => {
+                        std.debug.print("simple node:\n", .{});
                         try curr_block.addInstruction(curr_node);
                         var iterator = self.recExp.expr.iterator();
                         sliceIteratorByKey(&iterator, curr_node_id);
@@ -359,6 +413,7 @@ pub fn CfgBuilder(comptime L: type) type {
                         const next = iterator.next();
                         if (next == null) {
                             try self.cfg.addBlock(curr_block);
+                            try self.cfg.addEdge(self.curr_block_id, self.curr_block_id - 1);
                             break;
                         }
 
@@ -367,6 +422,7 @@ pub fn CfgBuilder(comptime L: type) type {
                     },
 
                     rvsdg.Node.gama => {
+                        std.debug.print("gama node:\n", .{});
                         try self.cfg.addBlock(curr_block);
                         self.curr_block_id += 1;
                         try self.parseGammaNode(curr_node.gama);
@@ -376,14 +432,21 @@ pub fn CfgBuilder(comptime L: type) type {
                         const next = iterator.next();
                         if (next == null) {
                             try self.cfg.addBlock(curr_block);
+                            try self.cfg.addEdge(self.curr_block_id - 1, self.curr_block_id);
                             break;
                         }
+
+                        std.debug.print("unified flow node: {}\n", .{next.?.value_ptr.*});
+                        //break;
 
                         curr_node = next.?.value_ptr.*;
                         self.curr_block_id += 1;
                         curr_block = BasicBlock(L).init(self.allocator, self.curr_block_id);
-                        try self.cfg.addEdge(self.curr_block_id, self.curr_block_id + 1);
-                        curr_node_id += 1;
+                        //var edge = self.cfg.edge_pool.clone;
+                        //std.debug.print("edge for example: {}", .{edge});
+                        //try self.cfg.addEdge(self.curr_block_id, self.curr_block_id + 1);
+                        curr_node_id = next_node + 1;
+                        std.debug.print("next node: {}\n", .{curr_node_id});
                     },
 
                     rvsdg.Node.theta => {
@@ -396,13 +459,14 @@ pub fn CfgBuilder(comptime L: type) type {
                         const next = iterator.next();
                         if (next == null) {
                             try self.cfg.addBlock(curr_block);
+                            try self.cfg.addEdge(self.curr_block_id - 1, self.curr_block_id);
                             break;
                         }
 
                         curr_node = next.?.value_ptr.*;
                         self.curr_block_id += 1;
                         curr_block = BasicBlock(L).init(self.allocator, self.curr_block_id);
-                        try self.cfg.addEdge(self.curr_block_id, self.curr_block_id + 1);
+                        //try self.cfg.addEdge(self.curr_block_id, self.curr_block_id + 1);
                         curr_node_id += 1;
                     },
 
@@ -446,12 +510,13 @@ test "test gammanode parsing" {
     try recexp.expr.put(6, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 10, .rhs = 2 } } });
     try recexp.expr.put(7, gamaexit);
     try recexp.expr.put(8, rvsdg.Node{ .simple = Instruction{ .shr = BinOp{ .lhs = 15, .rhs = 39 } } });
+
     var builder = CfgBuilder(rvsdg.Node).init(recexp, std.testing.allocator);
     builder.curr_block_id += 1;
     defer builder.deinit();
     //std.log.warn("hello world", .{});
     try builder.parseGammaNode(gamanode.gama);
-    //builder.cfg.printTree();
+    builder.cfg.printTree();
     //builder.deinit();
     //std.debug.print("------------------------------------------------------------------------------------", .{});
     //builder.cfg.printTree();
@@ -487,32 +552,38 @@ test "test rvsdg function to cfg" {
     std.debug.print("\nstart rvsdg->cfg test:\n", .{});
     var recexp = RecExpr(rvsdg.Node){ .expr = std.AutoArrayHashMap(u32, rvsdg.Node).init(std.testing.allocator) };
     defer recexp.expr.deinit();
-    var paths = [2]Id{ 5, 11 };
+    //var paths = [2]Id{ 5, 13 };
     var arguments = [2]u32{ 100, 101 };
     var lambdanode = rvsdg.Node{ .lambda = rvsdg.LambdaNode{ .node_id = 1, .function_body = 2, .arguments = arguments[0..], .output = 100 } };
-    var gamanode = rvsdg.Node{ .gama = rvsdg.GamaNode{ .cond = 9, .paths = paths[0..], .node_id = 1, .unified_flow_node = 8 } };
-    var gamaexit = rvsdg.Node{ .gamaExit = rvsdg.GamaExitNode{ .unified_flow_node = 13 } };
+    //var gamanode = rvsdg.Node{ .gama = rvsdg.GamaNode{ .cond = 9, .paths = paths[0..], .node_id = 1, .unified_flow_node = 14 } };
+    //var gamaexit = rvsdg.Node{ .gamaExit = rvsdg.GamaExitNode{ .unified_flow_node = 14 } };
+    var thetanode = rvsdg.Node{ .theta = rvsdg.ThetaNode{ .node_id = 3, .tail_cond = 12, .loop_body = 4, .exit_node = 15 } };
+    var thetaexitnode = rvsdg.Node{ .thetaExit = rvsdg.ThetaExitNode{ .node_id = 14 } };
 
     try recexp.expr.put(1, lambdanode);
     try recexp.expr.put(2, rvsdg.Node{ .simple = Instruction{ .add = BinOp{ .lhs = 10, .rhs = 12 } } });
-    try recexp.expr.put(3, gamanode);
+    try recexp.expr.put(3, thetanode);
     try recexp.expr.put(4, rvsdg.Node{ .simple = Instruction{ .add = BinOp{ .lhs = 12, .rhs = 20 } } });
     //try recexp.expr.put(4, rvsdg.Node{ .thetaExit = rvsdg.ThetaExitNode{ .node_id = 4 } });
     try recexp.expr.put(5, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 15, .rhs = 17 } } });
     try recexp.expr.put(6, rvsdg.Node{ .simple = Instruction{ .mul = BinOp{ .lhs = 17, .rhs = 19 } } });
-    try recexp.expr.put(7, gamaexit);
+    //try recexp.expr.put(7, gamaexit);
     //try recexp.expr.put(7, rvsdg.Node{ .thetaExit = rvsdg.ThetaExitNode{ .node_id = 7 } });
-    try recexp.expr.put(8, rvsdg.Node{ .simple = Instruction{ .shr = BinOp{ .rhs = 16, .lhs = 29 } } });
-    try recexp.expr.put(9, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 15, .rhs = 17 } } });
-    try recexp.expr.put(10, rvsdg.Node{ .simple = Instruction{ .mul = BinOp{ .lhs = 17, .rhs = 19 } } });
+    try recexp.expr.put(7, rvsdg.Node{ .simple = Instruction{ .shr = BinOp{ .rhs = 16, .lhs = 29 } } });
+    try recexp.expr.put(8, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 15, .rhs = 17 } } });
+    try recexp.expr.put(9, rvsdg.Node{ .simple = Instruction{ .mul = BinOp{ .lhs = 17, .rhs = 19 } } });
 
-    try recexp.expr.put(11, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 15, .rhs = 17 } } });
+    try recexp.expr.put(10, rvsdg.Node{ .simple = Instruction{ .sub = BinOp{ .lhs = 15, .rhs = 17 } } });
+    try recexp.expr.put(11, thetaexitnode);
     try recexp.expr.put(12, rvsdg.Node{ .simple = Instruction{ .mul = BinOp{ .lhs = 17, .rhs = 19 } } });
-    try recexp.expr.put(7, gamaexit);
+    //try recexp.expr.put(14, gamaexit);
     try recexp.expr.put(13, rvsdg.Node{ .simple = Instruction{ .shl = BinOp{ .lhs = 25, .rhs = 12 } } });
+    try recexp.expr.put(14, thetaexitnode);
+    try recexp.expr.put(15, rvsdg.Node{ .simple = Instruction{ .mul = BinOp{ .lhs = 20, .rhs = 30 } } });
     //try recexp.expr.put(6, rvsdg.Node{ .simple = Instruction{ .mul = BinOp{ .lhs = 17, .rhs = 19 } } });
 
-    var builder = CfgBuilder(rvsdg.Node).init(recexp, std.testing.allocator);
+    var allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var builder = CfgBuilder(rvsdg.Node).init(recexp, allocator.allocator());
     try builder.parseFunctionIntoCfg(lambdanode.lambda);
 
     builder.cfg.printTree();
