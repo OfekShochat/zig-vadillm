@@ -1,110 +1,93 @@
 const std = @import("std");
-const types = @import("types.zig");
-const Type = @import("types.zig").Type;
-const mem = std.mem;
-const ir = @import("ir.zig");
-const a = @import("DominatorTree.zig");
-const wtf = @import("LoopAnalysis.zig");
-const IndexedMap = @import("indexed_map.zig").IndexedMap;
-const Function = @import("function.zig").Function;
-const ControlFlowGraph = @import("ControlFlowGraph.zig");
-const Instruction = @import("instructions.zig").Instruction;
-const Signature = @import("function.zig").Signature;
+const types = @import("../types.zig");
 
-pub const std_options = struct {
-    // Set the log level to info
-    pub const log_level = .info;
-};
-
-pub const Target = struct {};
-
-pub const Constant = []const u8;
-
-pub const FunctionDecl = struct {
-    name: []const u8,
-    signature: Signature,
-};
-
-// pub const Rewrite = struct {
-//     name: []const u8,
-// };
-//
-// pub fn parseRewrite(comptime name: []const u8, comptime rw: []const u8) !Rewrite {
-//     return struct {};
-// }
-
-// pub const VerifierError = struct {
-//     ty: enum {
-//         Typecheck,
-//     },
-//     loc: Index,
-//     message: []const u8,
-// };
-
-// pub const Verifier = struct {
-//     // graph: *const Graph,
-
-//     pub const ErrorStack = std.ArrayList(VerifierError);
-
-//     pub fn init() Verifier {}
-
-//     pub fn verify(self: *Verifier, error_stack: *ErrorStack) bool {
-//         var iter = self.graph.nodes.iterator();
-//         while (iter) |kv| {
-//             try self.typecheck(kv.key_ptr.*, error_stack);
-//         }
-//     }
-
-//     fn typecheck(self: Verifier, node: Index, error_stack: *ErrorStack) !void {
-//         _ = self;
-
-//         try error_stack.append(VerifierError{
-//             .ty = .Typecheck,
-//             .loc = node,
-//             .message = "",
-//         });
-//     }
-// };
+const Target = @import("Target.zig");
+const MachineInst = @import("MachineInst.zig");
+const Abi = @import("Abi.zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var alloc = gpa.allocator();
+    const allocator =std.heap.page_allocator;
 
-    // var instructio = std.heap.MemoryPool(std.ArrayListUnmanaged(ir.Index)).init(alloc);
+    var buffer = std.ArrayList(u8).init(allocator);
+    defer buffer.deinit();
 
-    var func = Function.init(alloc, Signature{
-        .ret = types.I32,
-        .args = .{},
-    });
+    var gwriter = buffer.writer();
+    const writer = gwriter.any();
 
-    defer func.deinit(alloc);
+    // TODO: have preferred and not-preferred regs within the allocator (callee-saved regs for example)
+    // if a reg is used from the non-preferred regs, it is moved to the preferred regs. see, callee-saved
+    // regs.
 
-    try func.appendParam(alloc, types.I32);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
-    const b = try func.appendBlock(alloc);
-    const b2 = try func.appendBlock(alloc);
+    const insts: []const Inst = &.{
+        Inst{ .mov_mr = .{ .src = MemoryAddressing{
+            .base = rsp,
+            .index = rbx,
+            .scale = 8,
+            .disp = 3,
+        }, .dst = rax, .size = .@"8" } },
+        Inst{ .mov_iv = .{ .imm = 60, .dst = regalloc.VirtualReg{ .typ = types.I32, .index = 0 } } },
+        Inst{ .mov_iv = .{ .imm = 32, .dst = regalloc.VirtualReg{ .typ = types.I32, .index = 1 } } },
+        Inst{
+            .syscall = &.{
+                regalloc.VirtualReg{ .typ = types.I32, .index = 0 },
+                regalloc.VirtualReg{ .typ = types.I32, .index = 1 },
+            },
+        },
+        Inst{ .mov = .{
+            .src = regalloc.VirtualReg{ .typ = types.I32, .index = 1 },
+            .dst = regalloc.VirtualReg{ .typ = types.I32, .index = 2 },
+            .size = .@"8",
+        } },
+    };
 
-    // var args = (try instructio.create());
-    _ = try func.appendInst(
-        alloc,
-        b,
-        Instruction{ .jump = .{ .block = b2, .args = .{} } },
-        types.I32,
-    );
+    var mach_insts = try allocator.alloc(MachineInst, insts.len);
+    defer allocator.free(mach_insts);
 
-    const p1 = try func.appendBlockParam(alloc, b, types.I32);
+    for (insts, 0..) |*inst, i| {
+        mach_insts[i] = inst.machInstReadable();
+    }
 
-    _ = try func.appendInst(
-        alloc,
-        b2,
-        Instruction{ .ret = p1 },
-        types.I32,
-    );
+    const func = MachineFunction{
+        .insts = mach_insts,
+        .params = &.{},
+        .block_headers = &.{
+            MachineFunction.BlockHeader{
+                .start = .{ .point = 0 },
+                .end = .{ .point = 8 },
+            },
+        },
+        .num_virtual_regs = 3,
+    };
 
-    const cfg = try ControlFlowGraph.fromFunction(alloc, &func);
+    var target = Target{
+        .vtable = Target.VTable{
+            .emitNops = emitNops,
+            .emitStitch = emitMov,
+            .emitPrologue = Inst.emitPrologueText,
+            .emitEpilogue = Inst.emitEpilogueText,
+        },
+    };
 
-    var domtree = a{};
-    try domtree.compute(alloc, &cfg);
-    std.log.info("{any}", .{domtree.formatter(&cfg, &func)});
-    std.log.info("{any}", .{@sizeOf(Instruction)});
+    const Object = @import("Object.zig");
+    var object = Object{
+        .code_buffer = writer,
+        .const_buffer = undefined,
+        .symtab = undefined,
+    };
+
+    var cfg = @import("../ControlFlowGraph.zig"){ .entry_ref = 0 };
+    defer cfg.deinit(allocator);
+    try cfg.nodes.put(allocator, 0, @import("../ControlFlowGraph.zig").CFGNode{ .preds = .{}, .succs = .{} });
+    try cfg.computePostorder(allocator);
+
+    const solution = try regalloc.runRegalloc(@import("BacktrackingAllocator.zig"), allocator, &cfg, abi, &func);
+
+    var consumer = regalloc.SolutionConsumer.init(allocator, solution);
+    defer consumer.deinit();
+
+    try target.emit(allocator, &func, &consumer, abi, &object);
+    std.debug.print("{s}\n", .{buffer.items});
 }

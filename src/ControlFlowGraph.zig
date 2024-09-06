@@ -47,7 +47,7 @@ pub fn fromFunction(allocator: std.mem.Allocator, func: *const Function) !Contro
     return cfg;
 }
 
-fn computePostorder(self: *ControlFlowGraph, allocator: std.mem.Allocator) !void {
+pub fn computePostorder(self: *ControlFlowGraph, allocator: std.mem.Allocator) !void {
     // we shouldn't visit blocks more than twice (loops)
     var visited_blocks = std.AutoHashMap(Index, void).init(allocator);
     defer visited_blocks.deinit();
@@ -127,6 +127,16 @@ pub fn get(self: ControlFlowGraph, block_ref: Index) ?*const CFGNode {
     return self.nodes.getPtr(block_ref);
 }
 
+pub fn getPreds(self: ControlFlowGraph, block_ref: Index) ?HashSet(Index) {
+    const node = self.nodes.getPtr(block_ref) orelse return null;
+    return node.preds;
+}
+
+pub fn getSuccs(self: ControlFlowGraph, block_ref: Index) ?HashSet(Index) {
+    const node = self.nodes.getPtr(block_ref) orelse return null;
+    return node.succs;
+}
+
 pub fn postorderIter(self: *const ControlFlowGraph) std.mem.ReverseIterator(Index) {
     return std.mem.reverseIterator(self.rpo.items);
 }
@@ -135,7 +145,7 @@ const types = @import("types.zig");
 const Instruction = @import("instructions.zig").Instruction;
 
 test "ControlFlowGraph" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     var func = Function.init(allocator, Signature{
         .ret = types.I32,

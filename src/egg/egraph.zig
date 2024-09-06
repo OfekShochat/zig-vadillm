@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const egg = @import("../egg.zig");
+const egg = @import("egg.zig");
 const machine = @import("machine.zig");
 const UnionFind = egg.UnionFind;
 
@@ -63,7 +63,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
         allocator: std.mem.Allocator,
 
         comptime {
-            if (!std.meta.trait.is(.Union)(L)) {
+            if (@typeInfo(L) != .Union) {
                 @compileError("`L` has to be a union to qualify to be a Language.");
             }
         }
@@ -107,7 +107,11 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
         pub fn addEclass(self: *@This(), first_enode: L) !Id {
             var enode = first_enode;
-            if (self.lookup(&enode)) |existing| {
+
+            // Find representatives for all children.
+            self.canonicalize(&enode);
+
+            if (self.memo.get(enode)) |existing| {
                 return existing;
             }
 
@@ -118,17 +122,14 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
             const eclass = EClass{ .nodes = nodes, .ctx = .{} };
 
-            if (enode.getMutableChildren()) |children| {
-                for (children) |child| {
-                    var eclass_child = self.eclasses.getPtr(child) orelse @panic("a saved enode's child is invalid.");
-                    try eclass_child.parents.put(self.allocator, enode, id);
-                }
+            for (enode.getMutableChildren()) |child| {
+                var eclass_child = self.eclasses.getPtr(child) orelse @panic("a saved enode's child is invalid.");
+                try eclass_child.parents.put(self.allocator, enode, id);
             }
 
             try self.eclasses.put(id, eclass);
             try self.memo.putNoClobber(enode, id);
 
-            // here can call a callback?
             self.dirty = true;
 
             return id;
@@ -190,11 +191,11 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
             for (subst_ast, 0..) |node, i| {
                 switch (node) {
                     .enode => |enode| {
-                        if (enode.getChildren()) |ast_children| {
+                        if (enode.getChildren().len > 0) {
                             var copied = enode;
 
                             // for each child, map its id to the actual egraph id
-                            for (copied.getMutableChildren().?, ast_children) |*child, ast_id| {
+                            for (copied.getMutableChildren(), enode.getChildren()) |*child, ast_id| {
                                 child.* = ids.items[ast_id];
                             }
 
@@ -227,17 +228,9 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
         }
 
         /// updates enode in-place
-        fn lookup(self: @This(), enode: *L) ?Id {
-            self.canonicalize(enode);
-            return self.memo.get(enode.*);
-        }
-
-        /// updates enode in-place
         fn canonicalize(self: @This(), enode: *L) void {
-            if (enode.getMutableChildren()) |children| {
-                for (children) |*child| {
-                    child.* = self.find(child.*);
-                }
+            for (enode.getMutableChildren()) |*child| {
+                child.* = self.find(child.*);
             }
         }
 
@@ -248,7 +241,6 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
             _ = self.union_find.merge(a, b);
             try self.dirty_ids.append(a); // submit a pending enode to repair
-
 
             var eclass1 = self.eclasses.getPtr(a).?;
             var eclass2 = self.eclasses.getPtr(b).?;
@@ -278,7 +270,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
             var iter = eclass.parents.iterator();
             while (iter.next()) |entry| {
-                var parent = entry.key_ptr;
+                const parent = entry.key_ptr;
 
                 std.debug.assert(self.memo.remove(parent.*));
                 self.canonicalize(parent);
@@ -293,7 +285,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
             iter = eclass.parents.iterator();
             while (iter.next()) |entry| {
-                var parent = entry.key_ptr;
+                const parent = entry.key_ptr;
                 self.canonicalize(parent);
 
                 if (visited_parents.get(parent.*)) |visited_parent| {
@@ -309,7 +301,7 @@ pub fn EGraph(comptime L: type, comptime C: type) type {
 
         fn rebuild(self: *@This()) !void {
             while (self.dirty_ids.items.len > 0) {
-                var todo = try self.dirty_ids.toOwnedSlice();
+                const todo = try self.dirty_ids.toOwnedSlice();
                 for (todo) |eclass| {
                     try self.repair(self.find(eclass));
                 }

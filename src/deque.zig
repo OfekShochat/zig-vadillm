@@ -41,6 +41,7 @@ pub fn DequeAligned(comptime T: type, comptime alignment: ?u29) type {
                 return;
             }
 
+            // Look at std.ArrayList's impl
             var better_capacity = new_capacity;
             while (true) {
                 better_capacity +|= better_capacity / 2 + 8;

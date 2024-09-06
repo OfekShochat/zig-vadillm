@@ -1,43 +1,47 @@
 const std = @import("std");
 
 const regalloc = @import("regalloc.zig");
-// TODO:
 // const types = @import("../types.zig");
-const BlockCall = @import("MachineFunction.zig").BlockCall;
+
+const Abi = @import("Abi.zig");
 
 const MachineInst = @This();
 
-vptr: *anyopaque,
+vptr: *const anyopaque,
 vtable: VTable,
 
-// constants
-
-/// in bytes
-worst_case_size: u32,
-
 pub const VTable = struct {
-    getAllocatableOperands: *const fn (self: *anyopaque, *std.ArrayList(regalloc.Operand)) std.mem.Allocator.Error!void,
-// TODO:
+    getAllocatableOperands: *const fn (self: *const anyopaque, Abi, *std.ArrayList(regalloc.Operand)) std.mem.Allocator.Error!void,
+    // TODO:
     // regTypeForClass: *const fn (regalloc.RegClass) types.Type,
-    getBlockCall: *const fn (self: *anyopaque) ?BlockCall,
+    emit: *const fn (self: *const anyopaque, *std.io.AnyWriter, *const std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.Allocation)) anyerror!void,
+    getStackDelta: *const fn (self: *const anyopaque) isize,
+    clobbers: *const fn (self: *const anyopaque, preg: regalloc.PhysicalReg) bool,
     // fromBytes: *const fn (allocator: std.mem.Allocator, []const u8) error.ParseError!MachineInst,
     // deinit: *const fn (self: *anyopaque, allocator: std.mem.Allocator) void,
 };
 
-pub fn getBlockCall(self: MachineInst) ?BlockCall {
-    return self.vtable.getBlockCall(self.vptr);
+pub fn getAllocatableOperands(self: MachineInst, abi: Abi, operands_out: *std.ArrayList(regalloc.Operand)) !void {
+    return self.vtable.getAllocatableOperands(self.vptr, abi, operands_out);
 }
 
-pub fn getAllocatableOperands(self: MachineInst, operands_out: *std.ArrayList(regalloc.Operand)) !void {
-    return self.vtable.getAllocatableOperands(self.vptr, operands_out);
+pub fn getStackDelta(self: MachineInst) isize {
+    return self.vtable.getStackDelta(self.vptr);
+}
+
+pub fn emit(
+    self: MachineInst,
+    buffer: *std.io.AnyWriter,
+    mapping: *const std.AutoArrayHashMap(regalloc.VirtualReg, regalloc.Allocation),
+) !void {
+    try self.vtable.emit(self.vptr, buffer, mapping);
+}
+
+pub fn clobbers(self: MachineInst, preg: regalloc.PhysicalReg) bool {
+    return self.vtable.clobbers(self.vptr, preg);
 }
 
 // TODO:
 // pub fn regTypeForClass(self: MachineInst, class: regalloc.RegClass) types.Type {
 //     return self.vtable.regTypeForClass(class);
-// }
-
-// is call?
-// pub fn getTerminatorDataOrNull(self: MachineInst, ) {
-
 // }
